@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Mock Attendance Register Generator – Streamlit Application.
+"""Mock Attendance Register Generator – Streamlit Application (app.py).
 
 Converts a monthly employee salary Excel sheet (.xlsx) into a realistic,
 randomized, Indian-calendar-based monthly attendance register (.xlsx) formatted
 for official record-keeping and printing.
 
-Architecture (Single-File Modular Design):
-  1. Module A: Indian Calendar & Holiday Processing Engine
-  2. Module B: Preprocessing & Per-Day Wage Calculation Engine
-  3. Module C: Comprehensive Input Validation Engine
-  4. Module D: Randomized Attendance Generation Engine
-  5. Module E: Professional OpenPyXL Export & Print-Ready Formatting Engine
-  6. Module F: Sample Input Generator (for testing & demo)
-  7. Module G: Streamlit User Interface (6-Step Interactive Workflow)
+Modular Multi-File Architecture:
+  - `calender.py` (Module A): Indian Calendar & Holiday Processing Engine
+  - `sample.py`   (Module F): Sample Input Generator (for testing & demo)
+  - `app.py`      (Modules B, C, D, E, G):
+      * Module B: Preprocessing & Per-Day Wage Calculation Engine
+      * Module C: Comprehensive Input Validation Engine (supports Easy Mode [default]
+                  and Strict Mode)
+      * Module D: Randomized Attendance Generation Engine
+      * Module E: Professional OpenPyXL Export & Print-Ready Formatting Engine
+      * Module G: Streamlit User Interface (6-Step Interactive Workflow)
 """
 
 from __future__ import annotations
@@ -31,334 +33,21 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
-# Optional import for python-holidays (gracefully falls back to verified multi-year registry)
-try:
-    import holidays as py_holidays  # type: ignore
-    HAS_PY_HOLIDAYS = True
-except ImportError:
-    py_holidays = None
-    HAS_PY_HOLIDAYS = False
-
-
-# ==============================================================================
-# MODULE A: INDIAN CALENDAR & HOLIDAY PROCESSING ENGINE
-# ==============================================================================
-
-FIXED_HOLIDAYS: list[tuple[int, int, str, str]] = [
-    (1, 1, "New Year's Day", "Festival / Observance"),
-    (1, 26, "Republic Day", "National Holiday"),
-    (8, 15, "Independence Day", "National Holiday"),
-    (10, 2, "Gandhi Jayanti", "National Holiday"),
-    (12, 25, "Christmas Day", "Major Festival"),
-]
-
-# Verified Indian Lunar / Panchang Festival Registry (2020 - 2032)
-# Covers Holi, Ganesh Chaturthi, Dussehra / Vijayadashami, and Diwali (Lakshmi Puja)
-VERIFIED_INDIAN_FESTIVALS: dict[int, list[tuple[int, int, str, str]]] = {
-    2015: [
-        (3, 6, "Holi", "Major Festival"),
-        (9, 17, "Ganesh Chaturthi", "Major Festival"),
-        (10, 22, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 11, "Diwali", "Major Festival"),
-    ],
-    2016: [
-        (3, 24, "Holi", "Major Festival"),
-        (9, 5, "Ganesh Chaturthi", "Major Festival"),
-        (10, 11, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 30, "Diwali", "Major Festival"),
-    ],
-    2017: [
-        (3, 13, "Holi", "Major Festival"),
-        (8, 25, "Ganesh Chaturthi", "Major Festival"),
-        (9, 30, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 19, "Diwali", "Major Festival"),
-    ],
-    2018: [
-        (3, 2, "Holi", "Major Festival"),
-        (9, 13, "Ganesh Chaturthi", "Major Festival"),
-        (10, 19, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 7, "Diwali", "Major Festival"),
-    ],
-    2019: [
-        (3, 21, "Holi", "Major Festival"),
-        (9, 2, "Ganesh Chaturthi", "Major Festival"),
-        (10, 8, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 27, "Diwali", "Major Festival"),
-    ],
-    2020: [
-        (3, 10, "Holi", "Major Festival"),
-        (8, 22, "Ganesh Chaturthi", "Major Festival"),
-        (10, 25, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 14, "Diwali", "Major Festival"),
-    ],
-    2021: [
-        (3, 29, "Holi", "Major Festival"),
-        (9, 10, "Ganesh Chaturthi", "Major Festival"),
-        (10, 15, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 4, "Diwali", "Major Festival"),
-    ],
-    2022: [
-        (3, 18, "Holi", "Major Festival"),
-        (8, 31, "Ganesh Chaturthi", "Major Festival"),
-        (10, 5, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 24, "Diwali", "Major Festival"),
-    ],
-    2023: [
-        (3, 8, "Holi", "Major Festival"),
-        (9, 19, "Ganesh Chaturthi", "Major Festival"),
-        (10, 24, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 12, "Diwali", "Major Festival"),
-    ],
-    2024: [
-        (3, 25, "Holi", "Major Festival"),
-        (9, 7, "Ganesh Chaturthi", "Major Festival"),
-        (10, 12, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 1, "Diwali", "Major Festival"),
-    ],
-    2025: [
-        (3, 14, "Holi", "Major Festival"),
-        (8, 27, "Ganesh Chaturthi", "Major Festival"),
-        (10, 2, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 20, "Diwali", "Major Festival"),
-    ],
-    2026: [
-        (3, 4, "Holi", "Major Festival"),
-        (9, 14, "Ganesh Chaturthi", "Major Festival"),
-        (10, 20, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 8, "Diwali", "Major Festival"),
-    ],
-    2027: [
-        (3, 22, "Holi", "Major Festival"),
-        (9, 4, "Ganesh Chaturthi", "Major Festival"),
-        (10, 9, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 29, "Diwali", "Major Festival"),
-    ],
-    2028: [
-        (3, 11, "Holi", "Major Festival"),
-        (8, 23, "Ganesh Chaturthi", "Major Festival"),
-        (9, 27, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 17, "Diwali", "Major Festival"),
-    ],
-    2029: [
-        (3, 1, "Holi", "Major Festival"),
-        (9, 11, "Ganesh Chaturthi", "Major Festival"),
-        (10, 16, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 5, "Diwali", "Major Festival"),
-    ],
-    2030: [
-        (3, 20, "Holi", "Major Festival"),
-        (9, 1, "Ganesh Chaturthi", "Major Festival"),
-        (10, 6, "Dussehra / Vijayadashami", "Major Festival"),
-        (10, 26, "Diwali", "Major Festival"),
-    ],
-    2031: [
-        (3, 9, "Holi", "Major Festival"),
-        (9, 20, "Ganesh Chaturthi", "Major Festival"),
-        (10, 25, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 14, "Diwali", "Major Festival"),
-    ],
-    2032: [
-        (3, 27, "Holi", "Major Festival"),
-        (9, 8, "Ganesh Chaturthi", "Major Festival"),
-        (10, 13, "Dussehra / Vijayadashami", "Major Festival"),
-        (11, 2, "Diwali", "Major Festival"),
-    ],
-}
-
-
-@dataclasses.dataclass
-class HolidayEntry:
-    """Represents a single holiday or weekly OFF date in the selected month."""
-    date: datetime.date
-    name: str
-    category: str  # "Weekly OFF", "National Holiday", "Major Festival", "Custom Holiday"
-    is_sunday: bool
-
-
-@dataclasses.dataclass
-class MonthCalendarConfig:
-    """Holds the complete calendar and holiday structure for a selected month and year."""
-    year: int
-    month: int
-    month_name: str
-    total_calendar_days: int
-    all_dates: list[datetime.date]
-    sundays: list[datetime.date]
-    configured_holidays: dict[datetime.date, HolidayEntry]  # Public/festival/custom holidays
-    off_dates: set[datetime.date]  # Union of Sundays and configured_holidays
-    active_working_dates: list[datetime.date]
-
-    @property
-    def total_off_days(self) -> int:
-        return len(self.off_dates)
-
-    @property
-    def total_active_working_days(self) -> int:
-        return len(self.active_working_dates)
-
-
-def get_default_indian_holidays_for_year(year: int) -> dict[datetime.date, tuple[str, str]]:
-    """Returns a dictionary mapping date -> (holiday_name, category) for the given year.
-
-    Combines:
-      1. Fixed National Holidays (Republic Day, Independence Day, Gandhi Jayanti)
-         and fixed observances (New Year's Day, Christmas).
-      2. Verified Indian lunar festival registry (Holi, Ganesh Chaturthi,
-         Dussehra / Vijayadashami, Diwali).
-      3. Dynamic lookup from the `holidays` Python library (if installed) for years
-         outside the verified registry or additional gazetted festivals.
-    """
-    holiday_map: dict[datetime.date, tuple[str, str]] = {}
-
-    # 1. Fixed holidays
-    for m, d, name, cat in FIXED_HOLIDAYS:
-        dt = datetime.date(year, m, d)
-        holiday_map[dt] = (name, cat)
-
-    # 2. Verified multi-year Indian festival registry
-    if year in VERIFIED_INDIAN_FESTIVALS:
-        for m, d, name, cat in VERIFIED_INDIAN_FESTIVALS[year]:
-            dt = datetime.date(year, m, d)
-            if dt in holiday_map:
-                existing_name, existing_cat = holiday_map[dt]
-                if name.lower() not in existing_name.lower():
-                    holiday_map[dt] = (f"{existing_name} / {name}", existing_cat)
-            else:
-                holiday_map[dt] = (name, cat)
-    elif HAS_PY_HOLIDAYS and py_holidays is not None:
-        # 3. Fallback to python-holidays for years outside 2020-2032
-        try:
-            in_holidays = py_holidays.India(years=year)
-            target_keywords = ("holi", "ganesh", "vinayaka", "dussehra", "vijaya", "diwali", "deepavali")
-            for dt, name in in_holidays.items():
-                if any(k in name.lower() for k in target_keywords):
-                    if dt not in holiday_map:
-                        holiday_map[dt] = (name, "Major Festival")
-        except Exception:
-            pass
-
-    return holiday_map
-
-
-def get_month_default_holidays(
-    year: int,
-    month: int,
-    target_off_days: int | None = None,
-) -> list[dict[str, Any]]:
-    """Returns the default list of non-Sunday holidays falling in (year, month) for UI editing.
-
-    If `target_off_days` is provided (or inferred from DAILY employee records in the input sheet),
-    National Holidays are prioritized as `Active=True` and excess optional festivals are listed
-    with `Active=False` so the user can review and toggle them easily.
-    """
-    year_holidays = get_default_indian_holidays_for_year(year)
-    _, num_days = calendar.monthrange(year, month)
-    sundays_count = sum(1 for d in range(1, num_days + 1) if datetime.date(year, month, d).weekday() == 6)
-
-    month_holidays: list[dict[str, Any]] = []
-    for dt in sorted(year_holidays.keys()):
-        if dt.year == year and dt.month == month:
-            name, cat = year_holidays[dt]
-            month_holidays.append({
-                "Date": dt,
-                "Day": dt.strftime("%A"),
-                "Holiday Name": name,
-                "Category": cat,
-                "Active": True,
-            })
-
-    if target_off_days is not None and month_holidays:
-        needed_non_sunday_holidays = max(0, target_off_days - sundays_count)
-        non_sunday_seen = 0
-        for h in month_holidays:
-            if h["Date"].weekday() == 6:
-                h["Active"] = True
-            else:
-                if non_sunday_seen < needed_non_sunday_holidays:
-                    h["Active"] = True
-                    non_sunday_seen += 1
-                else:
-                    h["Active"] = False
-
-    return month_holidays
-
-
-def infer_target_off_days_from_df(df: pd.DataFrame, total_calendar_days: int) -> int | None:
-    """Infers the expected number of OFF days in the month from DAILY employee rows if present."""
-    col_map, missing = resolve_column_mapping(list(df.columns))
-    if missing:
-        return None
-    for _, row in df.dropna(how="all").iterrows():
-        w_type = str(row.get(col_map["wages_rate_type"]) or "").strip().upper()
-        if w_type == "DAILY":
-            p_val, p_err = _parse_non_negative_int(row.get(col_map["present_days"]))
-            a_val, a_err = _parse_non_negative_int(row.get(col_map["absent_days"]))
-            if not p_err and not a_err and p_val is not None and a_val is not None:
-                active_days = p_val + a_val
-                if 0 < active_days <= total_calendar_days:
-                    return total_calendar_days - active_days
-    return None
-
-
-def build_month_calendar(
-    year: int,
-    month: int,
-    custom_holiday_rows: list[dict[str, Any]] | None = None,
-) -> MonthCalendarConfig:
-    """Constructs the MonthCalendarConfig for the given year, month, and user-reviewed holidays."""
-    _, num_days = calendar.monthrange(year, month)
-    all_dates = [datetime.date(year, month, day) for day in range(1, num_days + 1)]
-    sundays = [dt for dt in all_dates if dt.weekday() == 6]
-
-    configured_holidays: dict[datetime.date, HolidayEntry] = {}
-
-    if custom_holiday_rows is None:
-        default_rows = get_month_default_holidays(year, month)
-    else:
-        default_rows = custom_holiday_rows
-
-    for row in default_rows:
-        if not row.get("Active", True):
-            continue
-        raw_dt = row.get("Date")
-        if isinstance(raw_dt, str):
-            try:
-                dt = datetime.date.fromisoformat(raw_dt)
-            except ValueError:
-                continue
-        elif isinstance(raw_dt, datetime.datetime):
-            dt = raw_dt.date()
-        elif isinstance(raw_dt, datetime.date):
-            dt = raw_dt
-        else:
-            continue
-
-        if dt.year != year or dt.month != month:
-            continue
-
-        h_name = str(row.get("Holiday Name") or "Holiday").strip()
-        h_cat = str(row.get("Category") or "Custom Holiday").strip()
-        configured_holidays[dt] = HolidayEntry(
-            date=dt,
-            name=h_name,
-            category=h_cat,
-            is_sunday=(dt.weekday() == 6),
-        )
-
-    off_dates = set(sundays) | set(configured_holidays.keys())
-    active_working_dates = [dt for dt in all_dates if dt not in off_dates]
-
-    return MonthCalendarConfig(
-        year=year,
-        month=month,
-        month_name=calendar.month_name[month],
-        total_calendar_days=num_days,
-        all_dates=all_dates,
-        sundays=sundays,
-        configured_holidays=configured_holidays,
-        off_dates=off_dates,
-        active_working_dates=active_working_dates,
-    )
+# Import separated modules
+from calender import (
+    FIXED_HOLIDAYS,
+    VERIFIED_INDIAN_FESTIVALS,
+    HolidayEntry,
+    MonthCalendarConfig,
+    build_month_calendar,
+    get_default_indian_holidays_for_year,
+    get_month_default_holidays,
+    infer_target_off_days_from_df,
+)
+from sample import (
+    create_sample_input_dataframe,
+    export_sample_input_to_excel,
+)
 
 
 # ==============================================================================
@@ -389,6 +78,11 @@ CORE_REQUIRED_KEYS: list[str] = [
     "absent_days",
     "salary_of_month",
 ]
+
+# Threshold up to which MONTHLY employees with low attendance (0, 1, 2, 3, 4, 5 days present)
+# have all present days placed directly as 'P' on active working days (no paid OFF deduction)
+# and wages calculated as Present Days * Per-Day Wage.
+LOW_PRESENT_THRESHOLD: int = 5
 
 
 def resolve_column_mapping(df_columns: list[Any]) -> tuple[dict[str, str], list[str]]:
@@ -448,30 +142,42 @@ def calculate_per_day_wage(
 # MODULE C: COMPREHENSIVE INPUT VALIDATION ENGINE
 # ==============================================================================
 
-class MonthlyAccountingMode:
-    """Defines how 'Present Days' in the input sheet is interpreted for MONTHLY employees.
+class ValidationMode:
+    """Defines the validation mode selectable in the Streamlit sidebar.
 
-    1. AUTO_DETECT (Default):
-       Accepts either convention cleanly and flags an informational note explaining which
-       convention each MONTHLY row uses:
-         - Convention 1 (Total Paid Days Entitlement - Prompt Section 2 & 7 example):
-           Input `Present Days` includes paid OFF days (`Present Days + Absent = Total Calendar Days`).
-           On the calendar grid, `OFF` days are marked `OFF`, `Active P = Present Days - OFF Days`,
-           and `Active A = Absent Days`.
-         - Convention 2 (Strict Active Working Days - Prompt Section 6.B & 8 formula):
-           Input `Present Days` represents only active working days present
-           (`Present Days + Absent + OFF Days = Total Calendar Days`).
-           On the calendar grid, `Active P = Present Days` and `Active A = Absent Days`.
+    1. EASY_MODE (Default):
+       - Trusts the uploaded `Present Days`, `Absent`, and `Salary of Month` values directly
+         and copies them as-is into the output summary columns (`Total Days Present`,
+         `Total Absent Days`, `Total Wages`) without blocking on `Present + Absent` sum mismatches.
+       - Keeps all Sundays and configured holidays marked as `'OFF'`.
+       - Follows the distinct `DAILY` vs `MONTHLY` logic to populate `'P'` and `'A'` across
+         the active working days:
+         * `DAILY` employees: places `min(Present Days, Active Working Days)` `'P'`s randomly
+           across active working days and fills the remaining active working days with `'A'`.
+         * `MONTHLY` employees:
+           - If `0 <= Present Days <= max(5, OFF Days)`: places `Present Days` `'P'`s directly
+             on active working days and fills the rest of active working days with `'A'` (with
+             wages proportional to `Present Days * Per-Day Wage` if not already set).
+           - If `Present Days > max(5, OFF Days)`: treats `OFF` days as paid entitlement
+             (`Active P = min(Present Days - OFF Days, Active Working Days)` if `Present Days > Active Working Days`
+             or `Present + Absent >= Calendar Days`, otherwise `Active P = min(Present Days, Active Working Days)`),
+             and fills the remaining active working days with `'A'`.
 
-    2. PAID_ENTITLEMENT_ONLY:
-       Enforces `Present Days + Absent = Total Calendar Days` (and `Present Days >= OFF Days`).
-
-    3. STRICT_WORKING_DAYS_ONLY:
-       Enforces `Present Days + Absent + OFF Days = Total Calendar Days`.
+    2. STRICT_MODE:
+       - Enforces exact mathematical equations for `Present + Absent` against the calendar
+         (with the 0–5 days low-attendance rule for `MONTHLY` employees).
     """
-    AUTO_DETECT = "AUTO_DETECT"
-    PAID_ENTITLEMENT_ONLY = "PAID_ENTITLEMENT_ONLY"
-    STRICT_WORKING_DAYS_ONLY = "STRICT_WORKING_DAYS_ONLY"
+    EASY_MODE = "EASY_MODE"
+    STRICT_MODE = "STRICT_MODE"
+
+
+# Keep MonthlyAccountingMode alias for backward compatibility with helper scripts
+class MonthlyAccountingMode:
+    AUTO_DETECT = ValidationMode.EASY_MODE
+    EASY_MODE = ValidationMode.EASY_MODE
+    STRICT_MODE = ValidationMode.STRICT_MODE
+    PAID_ENTITLEMENT_ONLY = ValidationMode.STRICT_MODE
+    STRICT_WORKING_DAYS_ONLY = ValidationMode.STRICT_MODE
 
 
 @dataclasses.dataclass
@@ -548,9 +254,9 @@ def _parse_positive_float(val: Any) -> tuple[float | None, str | None]:
 def validate_employee_dataframe(
     df: pd.DataFrame,
     cal_config: MonthCalendarConfig,
-    monthly_mode: str = MonthlyAccountingMode.AUTO_DETECT,
+    monthly_mode: str = ValidationMode.EASY_MODE,
 ) -> ValidationReport:
-    """Performs comprehensive validation on the uploaded employee DataFrame."""
+    """Performs validation on the uploaded employee DataFrame under Easy Mode or Strict Mode."""
     col_map, missing_cols = resolve_column_mapping(list(df.columns))
     if missing_cols:
         return ValidationReport(
@@ -581,6 +287,8 @@ def validate_employee_dataframe(
     total_cal_days = cal_config.total_calendar_days
     active_work_days = cal_config.total_active_working_days
     off_days = cal_config.total_off_days
+    low_present_cutoff = max(LOW_PRESENT_THRESHOLD, off_days)
+    is_easy_mode = (monthly_mode == ValidationMode.EASY_MODE)
 
     clean_df = df.dropna(how="all").copy()
 
@@ -742,166 +450,158 @@ def validate_employee_dataframe(
             )
             continue
 
-        # 5. Category-Specific Mathematical Attendance Validation
+        per_day_wage = calculate_per_day_wage(wage_type_str, base_rate, total_cal_days)
+
+        # 5. Category-Specific Attendance Mapping (Easy Mode vs Strict Mode)
         active_p = 0
-        active_a = absent_days
+        active_a = 0
         accounting_note = ""
 
-        if wage_type_str == "DAILY":
-            if present_days > active_work_days:
-                errors.append(
-                    EmployeeValidationError(
-                        row_index=excel_row_num,
-                        sno=sno_display,
-                        employee_name=name_str,
-                        wages_rate_type="DAILY",
-                        error_field="Present Days",
-                        message=(
-                            f"Present Days ({present_days}) exceeds available Active Working Days "
-                            f"({active_work_days}) in {cal_config.month_name} {cal_config.year}."
-                        ),
-                        remediation=(
-                            f"Reduce Present Days to <= {active_work_days} or review configured "
-                            f"holidays ({off_days} OFF days currently active)."
-                        ),
-                    )
+        if is_easy_mode:
+            # ── EASY MODE (Default): Never block on Present + Absent sum mismatches! ──
+            # Copy Present Days, Absent Days, and Salary of Month directly from input.
+            # Populate exact P count on active working days while keeping Sundays/Holidays as OFF.
+            if wage_type_str == "DAILY":
+                active_p = max(0, min(present_days, active_work_days))
+                active_a = active_work_days - active_p
+                accounting_note = (
+                    f"DAILY (Easy Mode): Placed {active_p} 'P' & {active_a} 'A' across {active_work_days} working days "
+                    f"(kept {off_days} OFF). Output Present={present_days}, Absent={absent_days} copied directly from input."
                 )
-                continue
-
-            if absent_days > active_work_days:
-                errors.append(
-                    EmployeeValidationError(
-                        row_index=excel_row_num,
-                        sno=sno_display,
-                        employee_name=name_str,
-                        wages_rate_type="DAILY",
-                        error_field="Absent",
-                        message=(
-                            f"Absent Days ({absent_days}) exceeds available Active Working Days "
-                            f"({active_work_days}) in {cal_config.month_name} {cal_config.year}."
-                        ),
-                        remediation=f"Reduce Absent Days to <= {active_work_days}.",
+            else:
+                # MONTHLY in Easy Mode:
+                # 1) If 0 <= Present Days <= max(5, OFF Days) (low attendance):
+                #    Place exact `Present Days` (0..5) as 'P' on active working days, fill rest with 'A'.
+                if 0 <= present_days <= low_present_cutoff:
+                    active_p = max(0, min(present_days, active_work_days))
+                    active_a = active_work_days - active_p
+                    est_low_wage = round(present_days * per_day_wage, 2)
+                    if total_wages == 0 and present_days > 0:
+                        total_wages = est_low_wage
+                    accounting_note = (
+                        f"MONTHLY (Easy Mode | 0–{low_present_cutoff} Days Rule): Placed {active_p} 'P' & {active_a} 'A' "
+                        f"plus {off_days} OFF. Output Present={present_days}, Absent={absent_days} copied directly from input."
                     )
-                )
-                continue
-
-            if present_days + absent_days != active_work_days:
-                errors.append(
-                    EmployeeValidationError(
-                        row_index=excel_row_num,
-                        sno=sno_display,
-                        employee_name=name_str,
-                        wages_rate_type="DAILY",
-                        error_field="Present + Absent Days",
-                        message=(
-                            f"For DAILY employee '{name_str}', Present Days ({present_days}) + "
-                            f"Absent Days ({absent_days}) = {present_days + absent_days}, which does not "
-                            f"equal Active Working Days ({active_work_days} = {total_cal_days} calendar days "
-                            f"- {off_days} OFF days)."
-                        ),
-                        remediation=(
-                            f"Update Present Days and Absent Days so their sum equals {active_work_days}, "
-                            f"or adjust the configured holidays in Step 3 if the month had {total_cal_days - (present_days + absent_days)} OFF days."
-                        ),
+                else:
+                    # 2) Standard MONTHLY (> 5 Present Days):
+                    #    If input Present Days includes paid OFF days (e.g., Present > Active Working Days,
+                    #    or Present + Absent >= Total Calendar Days - 1), subtract OFF days to get active 'P' cells.
+                    #    Otherwise, if input Present Days already represents only active working days, use it directly.
+                    if present_days > active_work_days or (present_days + absent_days >= total_cal_days - 1):
+                        active_p = max(0, min(present_days - off_days, active_work_days))
+                    else:
+                        active_p = max(0, min(present_days, active_work_days))
+                    active_a = active_work_days - active_p
+                    accounting_note = (
+                        f"MONTHLY (Easy Mode | Paid OFF Entitlement): Placed {active_p} 'P' + {off_days} paid 'OFF' "
+                        f"& {active_a} 'A'. Output Present={present_days}, Absent={absent_days} copied directly from input."
                     )
-                )
-                continue
 
-            active_p = present_days
-            active_a = absent_days
-            accounting_note = (
-                f"DAILY: {active_p} P + {active_a} A across {active_work_days} working days "
-                f"({off_days} OFF days excluded)."
-            )
-
-        elif wage_type_str == "MONTHLY":
-            matches_strict = (present_days + absent_days + off_days == total_cal_days)
-            matches_entitlement = (
-                (present_days + absent_days == total_cal_days)
-                and (present_days >= off_days)
-            )
-
-            if monthly_mode == MonthlyAccountingMode.STRICT_WORKING_DAYS_ONLY:
-                if not matches_strict:
+        else:
+            # ── STRICT MODE: Enforce exact mathematical attendance equations ──
+            if wage_type_str == "DAILY":
+                if present_days > active_work_days:
                     errors.append(
                         EmployeeValidationError(
                             row_index=excel_row_num,
                             sno=sno_display,
                             employee_name=name_str,
-                            wages_rate_type="MONTHLY",
-                            error_field="Monthly Attendance Formula (Strict Mode)",
+                            wages_rate_type="DAILY",
+                            error_field="Present Days",
                             message=(
-                                f"Present Days ({present_days}) + Absent Days ({absent_days}) + "
-                                f"OFF Days ({off_days}) = {present_days + absent_days + off_days}, "
-                                f"which does not equal Total Calendar Days ({total_cal_days})."
+                                f"Present Days ({present_days}) exceeds available Active Working Days "
+                                f"({active_work_days}) in {cal_config.month_name} {cal_config.year}."
                             ),
                             remediation=(
-                                f"Set Present Days to {total_cal_days - off_days - absent_days} so "
-                                f"Present + Absent + OFF = {total_cal_days}, or switch Monthly Accounting Mode "
-                                f"to 'Auto-Detect / Total Paid Entitlement' if Present Days ({present_days}) already includes paid OFF days."
+                                f"Reduce Present Days to <= {active_work_days}, review configured holidays, "
+                                f"or switch to 'Easy Mode' in the sidebar."
                             ),
                         )
                     )
                     continue
+
+                if absent_days > active_work_days:
+                    errors.append(
+                        EmployeeValidationError(
+                            row_index=excel_row_num,
+                            sno=sno_display,
+                            employee_name=name_str,
+                            wages_rate_type="DAILY",
+                            error_field="Absent",
+                            message=(
+                                f"Absent Days ({absent_days}) exceeds available Active Working Days "
+                                f"({active_work_days}) in {cal_config.month_name} {cal_config.year}."
+                            ),
+                            remediation=f"Reduce Absent Days to <= {active_work_days} or switch to 'Easy Mode'.",
+                        )
+                    )
+                    continue
+
+                if present_days + absent_days != active_work_days:
+                    errors.append(
+                        EmployeeValidationError(
+                            row_index=excel_row_num,
+                            sno=sno_display,
+                            employee_name=name_str,
+                            wages_rate_type="DAILY",
+                            error_field="Present + Absent Days",
+                            message=(
+                                f"For DAILY employee '{name_str}', Present Days ({present_days}) + "
+                                f"Absent Days ({absent_days}) = {present_days + absent_days}, which does not "
+                                f"equal Active Working Days ({active_work_days} = {total_cal_days} calendar days "
+                                f"- {off_days} OFF days)."
+                            ),
+                            remediation=(
+                                f"Update Present + Absent to equal {active_work_days}, adjust holidays in Step 3, "
+                                f"or switch to 'Easy Mode' in the sidebar."
+                            ),
+                        )
+                    )
+                    continue
+
                 active_p = present_days
                 active_a = absent_days
                 accounting_note = (
-                    f"MONTHLY (Strict Working Days): {active_p} P + {active_a} A + {off_days} paid OFF = {total_cal_days} days."
+                    f"DAILY (Strict Mode): {active_p} P + {active_a} A across {active_work_days} working days "
+                    f"({off_days} OFF days excluded)."
                 )
 
-            elif monthly_mode == MonthlyAccountingMode.PAID_ENTITLEMENT_ONLY:
-                if not matches_entitlement:
-                    errors.append(
-                        EmployeeValidationError(
-                            row_index=excel_row_num,
-                            sno=sno_display,
-                            employee_name=name_str,
-                            wages_rate_type="MONTHLY",
-                            error_field="Monthly Attendance Formula (Paid Entitlement Mode)",
-                            message=(
-                                f"Total Paid Present Days ({present_days}) + Absent Days ({absent_days}) = "
-                                f"{present_days + absent_days} (expected {total_cal_days} calendar days, "
-                                f"with Present Days >= {off_days} OFF days)."
-                            ),
-                            remediation=(
-                                f"Ensure Present Days (including {off_days} paid OFF days) + Absent Days = {total_cal_days}."
-                            ),
-                        )
+            elif wage_type_str == "MONTHLY":
+                is_low_attendance_case = (
+                    0 <= present_days <= low_present_cutoff
+                    and present_days <= active_work_days
+                    and (
+                        (present_days + absent_days == total_cal_days)
+                        or (present_days + absent_days + off_days == total_cal_days)
                     )
-                    continue
-                active_p = present_days - off_days
-                active_a = absent_days
-                accounting_note = (
-                    f"MONTHLY (Paid Entitlement): {present_days} Paid Days ({active_p} active P + {off_days} paid OFF) + {active_a} A = {total_cal_days} days."
+                )
+                matches_strict = (present_days + absent_days + off_days == total_cal_days)
+                matches_entitlement = (
+                    (present_days + absent_days == total_cal_days)
+                    and (present_days > low_present_cutoff)
                 )
 
-            else:
-                if matches_strict:
+                if is_low_attendance_case:
+                    active_p = present_days
+                    active_a = active_work_days - present_days
+                    est_low_wage = round(present_days * per_day_wage, 2)
+                    if total_wages == 0 and present_days > 0:
+                        total_wages = est_low_wage
+                    accounting_note = (
+                        f"MONTHLY (Strict Mode | 0–{low_present_cutoff} Days Rule): {active_p} P + {active_a} A "
+                        f"+ {off_days} unpaid OFF = {total_cal_days} days (Wage = {present_days} × ₹{per_day_wage:,.2f} = ₹{est_low_wage:,.2f})."
+                    )
+                elif matches_strict:
                     active_p = present_days
                     active_a = absent_days
                     accounting_note = (
-                        f"MONTHLY (Active Working Days): {active_p} P + {active_a} A + {off_days} paid OFF = {total_cal_days} days."
+                        f"MONTHLY (Strict Mode | Active Working Days): {active_p} P + {active_a} A + {off_days} paid OFF = {total_cal_days} days."
                     )
                 elif matches_entitlement:
                     active_p = present_days - off_days
                     active_a = absent_days
                     accounting_note = (
-                        f"MONTHLY (Paid Entitlement includes {off_days} OFF): {active_p} active P + {off_days} paid OFF = {present_days} Paid Days, {active_a} A."
-                    )
-                    warnings.append(
-                        EmployeeValidationError(
-                            row_index=excel_row_num,
-                            sno=sno_display,
-                            employee_name=name_str,
-                            wages_rate_type="MONTHLY",
-                            error_field="Paid OFF Entitlement Applied",
-                            message=(
-                                f"Input Present Days ({present_days}) + Absent ({absent_days}) = {total_cal_days} calendar days. "
-                                f"Treated as Total Paid Days ({active_p} active P + {off_days} paid OFF days = {present_days})."
-                            ),
-                            remediation="No change required if input Present Days includes paid Sundays/holidays.",
-                            is_warning=True,
-                        )
+                        f"MONTHLY (Strict Mode | Paid Entitlement): {active_p} active P + {off_days} paid OFF = {present_days} Paid Days, {active_a} A."
                     )
                 else:
                     errors.append(
@@ -920,36 +620,13 @@ def validate_employee_dataframe(
                             ),
                             remediation=(
                                 f"Correct Present Days and Absent Days so that either "
-                                f"(1) Present + Absent + {off_days} OFF = {total_cal_days} (Active Present = {total_cal_days - off_days - absent_days}), or "
-                                f"(2) Present (incl. paid OFF) + Absent = {total_cal_days} (Paid Present = {total_cal_days - absent_days})."
+                                f"(1) Present + Absent = {total_cal_days}, or "
+                                f"(2) Present + Absent + {off_days} OFF = {total_cal_days}, "
+                                f"or switch to 'Easy Mode' in the sidebar."
                             ),
                         )
                     )
                     continue
-
-        per_day_wage = calculate_per_day_wage(wage_type_str, base_rate, total_cal_days)
-
-        expected_salary = (
-            (present_days * per_day_wage)
-            if (wage_type_str == "DAILY" or (present_days + absent_days == total_cal_days))
-            else ((present_days + off_days) * per_day_wage)
-        )
-        if abs(expected_salary - total_wages) > max(50.0, 0.05 * base_rate):
-            warnings.append(
-                EmployeeValidationError(
-                    row_index=excel_row_num,
-                    sno=sno_display,
-                    employee_name=name_str,
-                    wages_rate_type=wage_type_str,
-                    error_field="Salary Cross-Check",
-                    message=(
-                        f"Input 'Salary of Month' (₹{total_wages:,.2f}) differs from estimated wage "
-                        f"(₹{expected_salary:,.2f}). Input value ₹{total_wages:,.2f} will be preserved as required."
-                    ),
-                    remediation="Informational only: Total Wages is taken directly from the input Salary of Month column.",
-                    is_warning=True,
-                )
-            )
 
         uan_val = ""
         if "uan" in col_map and not pd.isna(row.get(col_map["uan"])):
@@ -1041,7 +718,8 @@ def generate_attendance_register(
       1. Every calendar date has a column (`1` .. `N`).
       2. All Sundays and configured holidays are marked `'OFF'`.
       3. For each employee, `'P'` and `'A'` are randomly placed across active working days.
-      4. Exact counts of `'P'`, `'A'`, and `'OFF'` match the validated employee figures.
+      4. `Total Days Present`, `Total Absent Days`, and `Total Wages` are copied directly
+         from the validated input figures.
       5. Output columns strictly follow Section 7:
          S.No. | Name Of Employee's | 1 | 2 | ... | N | Total Days Present | Total Absent Days | Per Day Wage | Total Wages | SIGN
     """
@@ -1080,7 +758,7 @@ def generate_attendance_register(
                 row_dict[col_label] = "P"
                 p_count += 1
 
-        # Strict post-generation mathematical verification assertions
+        # Post-generation grid verification assertions
         assert p_count == emp.active_p_days, (
             f"Internal invariant failed for {emp.name}: generated P ({p_count}) != expected active P ({emp.active_p_days})"
         )
@@ -1094,6 +772,7 @@ def generate_attendance_register(
             f"Internal invariant failed for {emp.name}: total days != {cal_config.total_calendar_days}"
         )
 
+        # Copy Present Days, Absent Days, and Total Wages directly from input
         row_dict["Total Days Present"] = emp.input_present_days
         row_dict["Total Absent Days"] = emp.input_absent_days
         row_dict["Per Day Wage"] = emp.per_day_wage
@@ -1114,21 +793,7 @@ def export_attendance_register_to_excel(
     cal_config: MonthCalendarConfig,
     organization_title: str = "MONTHLY ATTENDANCE & WAGE REGISTER",
 ) -> bytes:
-    """Exports the generated attendance register to a print-ready OpenPyXL .xlsx workbook.
-
-    Formatting Highlights (Section 9):
-      - Worksheet title set to `<Month_Year>` (e.g., `October_2026`).
-      - Print Header set to `<organization_title> — <Month> <Year>` with calendar metadata.
-      - Row 1 contains bold column headings (`S.No.`, `Name Of Employee's`, `1 (Thu)`..`31 (Sat)`,
-        `Total Days Present`, `Total Absent Days`, `Per Day Wage`, `Total Wages`, `SIGN`) so that
-        every column is 100% data-type homogeneous.
-      - Center-aligned attendance values, left-aligned employee names, right-aligned numbers.
-      - Narrow uniform date columns; distinct subtle amber/peach fill for `OFF` columns,
-        crisp forest-green text for `P`, crimson tint for `A`.
-      - Explicit currency/integer number formatting (`₹#,##0.00` / `#,##0`).
-      - Blank `SIGN` column with generous width and row height for physical signatures.
-      - Frozen header & employee columns (`C2`), auto-filters enabled, and landscape fit-to-1-page-wide print setup.
-    """
+    """Exports the generated attendance register to a print-ready OpenPyXL .xlsx workbook."""
     wb = openpyxl.Workbook()
     ws = wb.active
     sheet_title = f"{cal_config.month_name}_{cal_config.year}"
@@ -1212,7 +877,7 @@ def export_attendance_register_to_excel(
         r_idx = start_data_row + row_offset
         is_even = (row_offset % 2 == 1)
         base_row_fill = zebra_fill if is_even else white_fill
-        ws.row_dimensions[r_idx].height = 22  # Generous height for physical signature
+        ws.row_dimensions[r_idx].height = 22
 
         for col_idx, col_name in enumerate(headers, start=1):
             val = emp_row[col_name]
@@ -1272,7 +937,7 @@ def export_attendance_register_to_excel(
                 cell.fill = base_row_fill
 
             elif col_name == "SIGN":
-                cell.value = None  # Strictly blank signature column
+                cell.value = None
                 cell.fill = base_row_fill
                 cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -1365,220 +1030,6 @@ def export_attendance_register_to_excel(
 
 
 # ==============================================================================
-# MODULE F: SAMPLE INPUT GENERATOR (FOR TESTING & DEMO)
-# ==============================================================================
-
-def create_sample_input_dataframe() -> pd.DataFrame:
-    """Returns a sample employee salary DataFrame for October 2026 matching Section 2."""
-    return pd.DataFrame([
-        {
-            "S.No.": 1,
-            "UAN": "NA",
-            "Name Of Employee's": "Malik Ram",
-            "Wages Rate": "DAILY",
-            "Salary / Wages Rate": 484,
-            "Present Days": 23,
-            "Absent": 3,
-            "Salary of Month": 11132,
-            "PF Deduction @12%": 0,
-            "PF Contribution @12%": 0,
-            "Net Salary of Month": 11132,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 2,
-            "UAN": "NA",
-            "Name Of Employee's": "Mithlesh Sahu",
-            "Wages Rate": "DAILY",
-            "Salary / Wages Rate": 700,
-            "Present Days": 24,
-            "Absent": 2,
-            "Salary of Month": 16800,
-            "PF Deduction @12%": 0,
-            "PF Contribution @12%": 0,
-            "Net Salary of Month": 16800,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 3,
-            "UAN": "NA",
-            "Name Of Employee's": "OMPRAKASH SONI",
-            "Wages Rate": "MONTHLY",
-            "Salary / Wages Rate": 45000,
-            "Present Days": 31,
-            "Absent": 0,
-            "Salary of Month": 45000,
-            "PF Deduction @12%": 0,
-            "PF Contribution @12%": 0,
-            "Net Salary of Month": 45000,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 4,
-            "UAN": "NA",
-            "Name Of Employee's": "AMIT SHARMA",
-            "Wages Rate": "MONTHLY",
-            "Salary / Wages Rate": 36000,
-            "Present Days": 27,
-            "Absent": 4,
-            "Salary of Month": 31355,
-            "PF Deduction @12%": 0,
-            "PF Contribution @12%": 0,
-            "Net Salary of Month": 31355,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 5,
-            "UAN": "UAN-101298347612",
-            "Name Of Employee's": "Rameshwar Verma",
-            "Wages Rate": "DAILY",
-            "Salary / Wages Rate": 550,
-            "Present Days": 25,
-            "Absent": 1,
-            "Salary of Month": 13750,
-            "PF Deduction @12%": 1650,
-            "PF Contribution @12%": 1650,
-            "Net Salary of Month": 12100,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 6,
-            "UAN": "UAN-101456789023",
-            "Name Of Employee's": "Sunita Devi",
-            "Wages Rate": "DAILY",
-            "Salary / Wages Rate": 484,
-            "Present Days": 22,
-            "Absent": 4,
-            "Salary of Month": 10648,
-            "PF Deduction @12%": 1278,
-            "PF Contribution @12%": 1278,
-            "Net Salary of Month": 9370,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 7,
-            "UAN": "UAN-101892345671",
-            "Name Of Employee's": "RAJESHWAR PRASAD",
-            "Wages Rate": "MONTHLY",
-            "Salary / Wages Rate": 28000,
-            "Present Days": 29,
-            "Absent": 2,
-            "Salary of Month": 26194,
-            "PF Deduction @12%": 1800,
-            "PF Contribution @12%": 1800,
-            "Net Salary of Month": 24394,
-            "SIGN": "",
-        },
-        {
-            "S.No.": 8,
-            "UAN": "UAN-101983451209",
-            "Name Of Employee's": "PRIYA NAIR",
-            "Wages Rate": "MONTHLY",
-            "Salary / Wages Rate": 52000,
-            "Present Days": 30,
-            "Absent": 1,
-            "Salary of Month": 50323,
-            "PF Deduction @12%": 1800,
-            "PF Contribution @12%": 1800,
-            "Net Salary of Month": 48523,
-            "SIGN": "",
-        },
-    ])
-
-
-def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
-    """Builds a formatted sample employee salary input .xlsx file."""
-    if df is None:
-        df = create_sample_input_dataframe()
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Salary_Oct_2026"
-    ws.views.sheetView[0].showGridLines = True
-
-    NAVY = "1B365D"
-    ALT_ROW = "F2F5F9"
-    BORDER_COLOR = "CBD5E1"
-    thin_side = Side(style="thin", color=BORDER_COLOR)
-    grid_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-
-    headers = list(df.columns)
-    for col_idx, h_text in enumerate(headers, start=1):
-        c = ws.cell(row=1, column=col_idx, value=h_text)
-        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        c.fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
-        c.alignment = Alignment(
-            horizontal="left" if col_idx in (2, 3) else ("center" if col_idx in (4, 12) else "right"),
-            vertical="center",
-            wrap_text=True,
-        )
-        c.border = grid_border
-    ws.row_dimensions[1].height = 25
-
-    for r_offset, (_, row) in enumerate(df.iterrows(), start=2):
-        ws.row_dimensions[r_offset].height = 20
-        is_even = (r_offset % 2 == 0)
-        row_fill = PatternFill(
-            start_color=ALT_ROW if is_even else "FFFFFF",
-            end_color=ALT_ROW if is_even else "FFFFFF",
-            fill_type="solid",
-        )
-        for col_idx, col_name in enumerate(headers, start=1):
-            val = row[col_name]
-            c = ws.cell(row=r_offset, column=col_idx)
-            c.border = grid_border
-            c.fill = row_fill
-            c.font = Font(name="Calibri", size=10)
-
-            if col_name == "SIGN":
-                c.value = None
-                c.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_name in ("S.No.", "Present Days", "Absent"):
-                c.value = int(val)
-                c.number_format = "#,##0"
-                c.alignment = Alignment(horizontal="right", vertical="center")
-            elif col_name in (
-                "Salary / Wages Rate",
-                "Salary of Month",
-                "PF Deduction @12%",
-                "PF Contribution @12%",
-                "Net Salary of Month",
-            ):
-                c.value = float(val)
-                c.number_format = "₹#,##0"
-                c.alignment = Alignment(horizontal="right", vertical="center")
-            elif col_name == "Wages Rate":
-                c.value = str(val).strip().upper()
-                c.alignment = Alignment(horizontal="center", vertical="center")
-            else:
-                c.value = str(val)
-                c.alignment = Alignment(horizontal="left", vertical="center")
-
-    ws.freeze_panes = "A2"
-
-    col_widths = {
-        1: 8,
-        2: 18,
-        3: 24,
-        4: 14,
-        5: 18,
-        6: 14,
-        7: 12,
-        8: 16,
-        9: 18,
-        10: 20,
-        11: 18,
-        12: 14,
-    }
-    for col_idx, width in col_widths.items():
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
-# ==============================================================================
 # MODULE G: STREAMLIT USER INTERFACE (6-STEP INTERACTIVE WORKFLOW)
 # ==============================================================================
 
@@ -1612,6 +1063,28 @@ def run_streamlit_app() -> None:
         use_sample_data = st.checkbox("Use built-in October 2026 sample data", value=False)
 
         st.divider()
+        st.subheader("🛡️ Validation Mode")
+        validation_mode_choice = st.radio(
+            "Select Attendance Validation Mode",
+            options=[
+                "Easy Mode (Default)",
+                "Strict Mode",
+            ],
+            index=0,
+            help=(
+                "Easy Mode (Default): Trusts your uploaded Present Days, Absent Days, and Salary figures directly "
+                "without blocking on Present + Absent sum checks. Randomly populates the exact Present ('P') count "
+                "across working days, keeps Sundays/holidays as 'OFF', and copies your exact Present & Absent numbers.\n\n"
+                "Strict Mode: Enforces strict Present + Absent calendar math equations before allowing generation."
+            ),
+        )
+        selected_validation_mode = (
+            ValidationMode.EASY_MODE
+            if validation_mode_choice.startswith("Easy Mode")
+            else ValidationMode.STRICT_MODE
+        )
+
+        st.divider()
         st.subheader("🎲 Randomization Settings")
         use_seed = st.checkbox("Use reproducible random seed", value=True)
         seed_val = st.number_input(
@@ -1628,28 +1101,6 @@ def run_streamlit_app() -> None:
             help="Distributes absences naturally across the month rather than clumping them together.",
         )
 
-        st.divider()
-        st.subheader("📐 Monthly Attendance Accounting")
-        monthly_mode_label = st.selectbox(
-            "MONTHLY 'Present Days' Interpretation",
-            options=[
-                "Auto-Detect (Supports Both Conventions)",
-                "Total Paid Entitlement (Present includes Paid OFF)",
-                "Strict Active Working Days (Present + Absent + OFF = Calendar Days)",
-            ],
-            index=0,
-            help=(
-                "Controls how input 'Present Days' is validated for MONTHLY employees. "
-                "Auto-Detect accepts both conventions and explains which rule applied."
-            ),
-        )
-        mode_map = {
-            "Auto-Detect (Supports Both Conventions)": MonthlyAccountingMode.AUTO_DETECT,
-            "Total Paid Entitlement (Present includes Paid OFF)": MonthlyAccountingMode.PAID_ENTITLEMENT_ONLY,
-            "Strict Active Working Days (Present + Absent + OFF = Calendar Days)": MonthlyAccountingMode.STRICT_WORKING_DAYS_ONLY,
-        }
-        selected_monthly_mode = mode_map[monthly_mode_label]
-
     # ── STEP 1: Upload Excel ──
     st.header("Step 1: Upload Employee Salary Excel Sheet")
     uploaded_file = st.file_uploader(
@@ -1664,11 +1115,11 @@ def run_streamlit_app() -> None:
         selected_sheet = st.selectbox("Select Worksheet", options=sheet_names, index=0)
         input_df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
         st.success(f"Loaded worksheet **{selected_sheet}** with **{len(input_df)}** rows.")
-        st.dataframe(input_df, use_container_width=True)
+        st.dataframe(input_df, width="stretch")
     elif use_sample_data:
         input_df = create_sample_input_dataframe()
         st.info("Using built-in October 2026 sample employee salary dataset.")
-        st.dataframe(input_df, use_container_width=True)
+        st.dataframe(input_df, width="stretch")
     else:
         st.info("Upload an `.xlsx` file above or check **'Use built-in October 2026 sample data'** in the sidebar to begin.")
 
@@ -1681,7 +1132,7 @@ def run_streamlit_app() -> None:
         selected_month = month_names.index(selected_month_name) + 1
     with col_y:
         selected_year = int(
-            st.number_input("Select Year", min_value=2020, max_value=2032, value=2026, step=1)
+            st.number_input("Select Year", min_value=2015, max_value=2032, value=2026, step=1)
         )
 
     # ── STEP 3: Review & Configure Indian Holidays ──
@@ -1711,7 +1162,7 @@ def run_streamlit_app() -> None:
     edited_holidays_df = st.data_editor(
         holiday_df_init,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Date": st.column_config.DateColumn(
                 "Date",
@@ -1766,7 +1217,7 @@ def run_streamlit_app() -> None:
                 "Day": dt.strftime("%A"),
                 "Status": status_label,
             })
-        st.dataframe(pd.DataFrame(cal_preview_rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(cal_preview_rows), width="stretch")
 
     if input_df is None:
         st.stop()
@@ -1776,13 +1227,13 @@ def run_streamlit_app() -> None:
     val_report = validate_employee_dataframe(
         input_df,
         cal_config,
-        monthly_mode=selected_monthly_mode,
+        monthly_mode=selected_validation_mode,
     )
 
     if val_report.errors:
         st.error(
             f"❌ Validation failed with **{len(val_report.errors)}** error(s). "
-            f"Please fix the issues below or adjust the holiday configuration before generating the register."
+            f"Please fix the issues below, adjust holidays, or switch to **Easy Mode (Default)** in the sidebar."
         )
         err_df = pd.DataFrame([
             {
@@ -1796,14 +1247,15 @@ def run_streamlit_app() -> None:
             }
             for e in val_report.errors
         ])
-        st.dataframe(err_df, use_container_width=True)
+        st.dataframe(err_df, width="stretch")
     else:
+        mode_badge = "Easy Mode" if selected_validation_mode == ValidationMode.EASY_MODE else "Strict Mode"
         st.success(
-            f"✅ All **{len(val_report.valid_records)}** employee records passed mathematical and schema validation!"
+            f"✅ All **{len(val_report.valid_records)}** employee records are ready for generation ({mode_badge})!"
         )
 
     if val_report.warnings:
-        with st.expander(f"ℹ️ View Validation Notes & Warnings ({len(val_report.warnings)})", expanded=True):
+        with st.expander(f"ℹ️ View Notes ({len(val_report.warnings)})", expanded=False):
             warn_df = pd.DataFrame([
                 {
                     "Excel Row": w.row_index,
@@ -1815,10 +1267,10 @@ def run_streamlit_app() -> None:
                 }
                 for w in val_report.warnings
             ])
-            st.dataframe(warn_df, use_container_width=True)
+            st.dataframe(warn_df, width="stretch")
 
     if val_report.valid_records:
-        with st.expander("🔍 Preview Validated Employee Preprocessing & Wage Calculations", expanded=True):
+        with st.expander("🔍 Preview Employee Preprocessing & Wage Calculations", expanded=True):
             pre_df = pd.DataFrame([
                 {
                     "S.No.": r.sno,
@@ -1826,17 +1278,17 @@ def run_streamlit_app() -> None:
                     "Wages Rate": r.wages_rate_type,
                     "Input Rate (₹)": r.base_rate,
                     "Per Day Wage (₹)": r.per_day_wage,
-                    "Input Present Days": r.input_present_days,
-                    "Input Absent Days": r.input_absent_days,
-                    "Calendar 'P' Cells": r.active_p_days,
-                    "Calendar 'A' Cells": r.active_a_days,
-                    "Calendar 'OFF' Cells": r.off_days_count,
+                    "Output Present Days (Copied)": r.input_present_days,
+                    "Output Absent Days (Copied)": r.input_absent_days,
+                    "Grid 'P' Cells": r.active_p_days,
+                    "Grid 'A' Cells": r.active_a_days,
+                    "Grid 'OFF' Cells": r.off_days_count,
                     "Total Wages (₹)": r.total_wages,
-                    "Accounting Rule": r.accounting_note,
+                    "Logic Applied": r.accounting_note,
                 }
                 for r in val_report.valid_records
             ])
-            st.dataframe(pre_df, use_container_width=True)
+            st.dataframe(pre_df, width="stretch")
 
     # ── STEP 5 & STEP 6: Generate Attendance & Download Excel ──
     st.header("Step 5 & 6: Generate Attendance Register & Download Excel")
@@ -1872,7 +1324,7 @@ def run_streamlit_app() -> None:
 
     if "generated_register_df" in st.session_state and val_report.is_valid:
         st.subheader("📋 Generated Attendance Register Preview")
-        st.dataframe(st.session_state["generated_register_df"], use_container_width=True)
+        st.dataframe(st.session_state["generated_register_df"], width="stretch")
 
         st.download_button(
             label=f"📥 Download Formatted Attendance Register ({st.session_state['generated_filename']})",
