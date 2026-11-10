@@ -179,24 +179,13 @@ class MonthCalendarConfig:
 
 
 def get_default_indian_holidays_for_year(year: int) -> dict[datetime.date, tuple[str, str]]:
-    """Returns a dictionary mapping date -> (holiday_name, category) for the given year.
-
-    Combines:
-      1. Fixed National Holidays (Republic Day, Independence Day, Gandhi Jayanti)
-         and fixed observances (New Year's Day, Christmas).
-      2. Verified Indian lunar festival registry (Holi, Ganesh Chaturthi,
-         Dussehra / Vijayadashami, Diwali) from 2015 to 2032.
-      3. Dynamic lookup from the `holidays` Python library (if installed) for years
-         outside the verified registry or additional gazetted festivals.
-    """
+    """Returns a dictionary mapping date -> (holiday_name, category) for the given year."""
     holiday_map: dict[datetime.date, tuple[str, str]] = {}
 
-    # 1. Fixed holidays
     for m, d, name, cat in FIXED_HOLIDAYS:
         dt = datetime.date(year, m, d)
         holiday_map[dt] = (name, cat)
 
-    # 2. Verified multi-year Indian festival registry
     if year in VERIFIED_INDIAN_FESTIVALS:
         for m, d, name, cat in VERIFIED_INDIAN_FESTIVALS[year]:
             dt = datetime.date(year, m, d)
@@ -207,7 +196,6 @@ def get_default_indian_holidays_for_year(year: int) -> dict[datetime.date, tuple
             else:
                 holiday_map[dt] = (name, cat)
     elif HAS_PY_HOLIDAYS and py_holidays is not None:
-        # 3. Fallback to python-holidays for years outside 2015-2032
         try:
             in_holidays = py_holidays.India(years=year)
             target_keywords = ("holi", "ganesh", "vinayaka", "dussehra", "vijaya", "diwali", "deepavali")
@@ -226,12 +214,7 @@ def get_month_default_holidays(
     month: int,
     target_off_days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Returns the default list of non-Sunday holidays falling in (year, month) for UI editing.
-
-    If `target_off_days` is provided (or inferred from DAILY employee records in the input sheet),
-    National Holidays are prioritized as `Active=True` and excess optional festivals are listed
-    with `Active=False` so the user can review and toggle them easily.
-    """
+    """Returns the default list of non-Sunday holidays falling in (year, month) for UI editing."""
     year_holidays = get_default_indian_holidays_for_year(year)
     _, num_days = std_calendar.monthrange(year, month)
     sundays_count = sum(1 for d in range(1, num_days + 1) if datetime.date(year, month, d).weekday() == 6)
@@ -264,17 +247,17 @@ def get_month_default_holidays(
     return month_holidays
 
 
-def _parse_int_helper(val: Any) -> int | None:
-    """Helper to parse non-negative integers when inferring OFF days from DAILY rows."""
+def _parse_day_helper(val: Any) -> float | None:
+    """Helper to parse non-negative integer or .5 half-day values when inferring OFF days."""
     if val is None or (isinstance(val, float) and math.isnan(val)) or pd.isna(val):
         return None
     try:
         f_val = float(str(val).replace(",", "").strip())
     except ValueError:
         return None
-    if f_val < 0 or abs(f_val - round(f_val)) > 1e-6:
+    if f_val < 0 or abs(f_val * 2 - round(f_val * 2)) > 1e-6:
         return None
-    return int(round(f_val))
+    return round(f_val * 2) / 2.0
 
 
 def infer_target_off_days_from_df(
@@ -312,10 +295,10 @@ def infer_target_off_days_from_df(
     for _, row in df.dropna(how="all").iterrows():
         w_type = str(row.get(w_col) or "").strip().upper()
         if w_type == "DAILY":
-            p_val = _parse_int_helper(row.get(p_col))
-            a_val = _parse_int_helper(row.get(a_col))
+            p_val = _parse_day_helper(row.get(p_col))
+            a_val = _parse_day_helper(row.get(a_col))
             if p_val is not None and a_val is not None:
-                active_days = p_val + a_val
+                active_days = int(round(p_val + a_val))
                 if 0 < active_days <= total_calendar_days:
                     return total_calendar_days - active_days
     return None

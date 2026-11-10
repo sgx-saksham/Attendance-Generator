@@ -1,25 +1,35 @@
 #!/usr/bin/env python3
 """Module F: Sample Input Generator for Testing & Demo (sample.py).
 
-Generates a realistic sample employee salary DataFrame and formatted Excel (.xlsx)
-workbook matching the exact 14-column input structure:
-S.No. | UAN | Name Of Employee's | Designation | Wages Rate | Salary / Wages Rate |
-Present Days | Absent | Salary of Month | PF Deduction @12% | PF Contribution @12% |
-Net Salary of Month | SIGN | Date of Resign
+Generates:
+  1. Single-Sheet 14-Column Sample Input Excel (`export_sample_input_to_excel`):
+     Includes DAILY employees, MONTHLY employees, half-day (`P/2`, e.g., `20.5` Present Days)
+     employees, and low-attendance (`0–5` days) MONTHLY employees.
+  2. Multi-Sheet Bulk Sample Input Excel (`export_bulk_sample_input_to_excel`):
+     Sheets named `{MMM YY}` (`JAN 24`, `APR 25`, `OCT 26`), Company Name in cell `D2`,
+     headers in `B10:O10`, employee data rows in `B11:O{n}`, plus trailing summary rows
+     where `S.No.`, `UAN`, and `Name Of Employee's` are empty to verify the strict cutoff rule.
 """
 
 from __future__ import annotations
 
 import io
+import math
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
 
+def _format_day_num(val: float | int) -> float | int:
+    """Returns int if val is a whole number, or float (x.5) if half day."""
+    f = float(val)
+    return int(round(f)) if abs(f - round(f)) < 1e-6 else round(f, 1)
+
+
 def create_sample_input_dataframe() -> pd.DataFrame:
     """Returns a sample employee salary DataFrame for October 2026 with the 14-column schema,
-    including DAILY employees, standard MONTHLY employees, and low-attendance (0–5 days) MONTHLY employees.
+    including DAILY, MONTHLY, half-day (20.5 present days -> 'P/2'), and 0–5 day cases.
     """
     return pd.DataFrame([
         {
@@ -45,12 +55,12 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "Designation": "Technician",
             "Wages Rate": "DAILY",
             "Salary / Wages Rate": 700,
-            "Present Days": 24,
-            "Absent": 2,
-            "Salary of Month": 16800,
+            "Present Days": 20.5,
+            "Absent": 5.5,
+            "Salary of Month": 14350,
             "PF Deduction @12%": 0,
             "PF Contribution @12%": 0,
-            "Net Salary of Month": 16800,
+            "Net Salary of Month": 14350,
             "SIGN": "",
             "Date of Resign": "",
         },
@@ -77,12 +87,12 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "Designation": "Supervisor",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 36000,
-            "Present Days": 27,
-            "Absent": 4,
-            "Salary of Month": 31355,
+            "Present Days": 26.5,
+            "Absent": 4.5,
+            "Salary of Month": 30774,
             "PF Deduction @12%": 0,
             "PF Contribution @12%": 0,
-            "Net Salary of Month": 31355,
+            "Net Salary of Month": 30774,
             "SIGN": "",
             "Date of Resign": "",
         },
@@ -157,12 +167,12 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "Designation": "Store Keeper",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 31000,
-            "Present Days": 3,
-            "Absent": 28,
-            "Salary of Month": 3000,
+            "Present Days": 3.5,
+            "Absent": 27.5,
+            "Salary of Month": 3500,
             "PF Deduction @12%": 0,
             "PF Contribution @12%": 0,
-            "Net Salary of Month": 3000,
+            "Net Salary of Month": 3500,
             "SIGN": "",
             "Date of Resign": "2026-10-05",
         },
@@ -186,7 +196,7 @@ def create_sample_input_dataframe() -> pd.DataFrame:
 
 
 def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
-    """Builds a formatted sample employee salary input .xlsx file with the 14-column structure."""
+    """Builds a formatted single-sheet sample employee salary input .xlsx file with print-friendly light headers."""
     if df is None:
         df = create_sample_input_dataframe()
 
@@ -195,8 +205,9 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
     ws.title = "Salary_Oct_2026"
     ws.views.sheetView[0].showGridLines = True
 
-    NAVY = "1B365D"
-    ALT_ROW = "F2F5F9"
+    HEADER_LIGHT_BG = "E2E8F0"
+    DARK_TEXT = "0F172A"
+    ALT_ROW = "F8FAFC"
     BORDER_COLOR = "CBD5E1"
     thin_side = Side(style="thin", color=BORDER_COLOR)
     grid_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
@@ -207,8 +218,8 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
 
     for col_idx, h_text in enumerate(headers, start=1):
         c = ws.cell(row=1, column=col_idx, value=h_text)
-        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        c.fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
+        c.font = Font(name="Calibri", size=11, bold=True, color=DARK_TEXT)
+        c.fill = PatternFill(start_color=HEADER_LIGHT_BG, end_color=HEADER_LIGHT_BG, fill_type="solid")
         h_clean = h_text.strip()
         c.alignment = Alignment(
             horizontal="left" if h_clean in text_cols else ("center" if h_clean in center_cols else "right"),
@@ -231,7 +242,7 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
             c = ws.cell(row=r_offset, column=col_idx)
             c.border = grid_border
             c.fill = row_fill
-            c.font = Font(name="Calibri", size=10)
+            c.font = Font(name="Calibri", size=10, color=DARK_TEXT)
             col_clean = col_name.strip()
 
             if col_clean == "SIGN":
@@ -241,9 +252,14 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
                 val_str = "" if pd.isna(val) else str(val).strip()
                 c.value = val_str if val_str else None
                 c.alignment = Alignment(horizontal="left", vertical="center")
-            elif col_clean in ("S.No.", "Present Days", "Absent"):
+            elif col_clean == "S.No.":
                 c.value = int(val)
                 c.number_format = "#,##0"
+                c.alignment = Alignment(horizontal="right", vertical="center")
+            elif col_clean in ("Present Days", "Absent"):
+                num_v = _format_day_num(val)
+                c.value = num_v
+                c.number_format = "#,##0.0" if isinstance(num_v, float) else "#,##0"
                 c.alignment = Alignment(horizontal="right", vertical="center")
             elif col_clean in (
                 "Salary / Wages Rate",
@@ -284,6 +300,127 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
         if col_idx <= len(headers):
             ws.column_dimensions[get_column_letter(col_idx)].width = width
 
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def export_bulk_sample_input_to_excel(
+    company_name: str = "Shree Balaji Industries Pvt. Ltd.",
+) -> bytes:
+    """Builds a multi-sheet Bulk Upload sample workbook matching the exact bulk layout:
+      - Sheet names in `{MMM YY}` format (`JAN 24`, `APR 25`, `OCT 26`)
+      - Cell `D2`: Company Name (`Shree Balaji Industries Pvt. Ltd.`)
+      - Cells `B10:O10`: 14 column headers (`S.No.` in B10 through `Date of Resign` in O10)
+      - Cells `B11:O20`: Employee data rows
+      - Cells `B21:O23`: Empty / trailing summary rows (where B, C, D are empty) to verify
+        that the bulk extractor stops immediately at the first row where S.No., UAN, and Name are empty.
+    """
+    wb = openpyxl.Workbook()
+    default_ws = wb.active
+
+    base_df = create_sample_input_dataframe()
+    headers = list(base_df.columns)
+
+    HEADER_LIGHT_BG = "E2E8F0"
+    DARK_TEXT = "0F172A"
+    ALT_ROW = "F8FAFC"
+    BORDER_COLOR = "CBD5E1"
+    thin_side = Side(style="thin", color=BORDER_COLOR)
+    grid_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    sheet_specs = [
+        ("JAN 24", 31),
+        ("APR 25", 30),
+        ("OCT 26", 31),
+    ]
+
+    for sheet_title, cal_days in sheet_specs:
+        ws = wb.create_sheet(title=sheet_title)
+        ws.views.sheetView[0].showGridLines = True
+
+        # Place Company Name in D2 (and a label in C2)
+        ws["C2"] = "Company Name:"
+        ws["C2"].font = Font(name="Calibri", size=11, bold=True, color=DARK_TEXT)
+        ws["D2"] = company_name
+        ws["D2"].font = Font(name="Calibri", size=13, bold=True, color=DARK_TEXT)
+
+        ws["C4"] = "Salary Month:"
+        ws["C4"].font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
+        ws["D4"] = sheet_title
+        ws["D4"].font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
+
+        # Write 14 headers in B10:O10 (columns 2..15)
+        for offset, h_text in enumerate(headers):
+            col_idx = 2 + offset  # B is column 2, O is column 15
+            c = ws.cell(row=10, column=col_idx, value=h_text)
+            c.font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
+            c.fill = PatternFill(start_color=HEADER_LIGHT_BG, end_color=HEADER_LIGHT_BG, fill_type="solid")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = grid_border
+        ws.row_dimensions[10].height = 24
+
+        # Write employee rows in B11:O20
+        for r_idx, (_, emp_row) in enumerate(base_df.iterrows(), start=11):
+            ws.row_dimensions[r_idx].height = 20
+            is_even = (r_idx % 2 == 0)
+            row_fill = PatternFill(
+                start_color=ALT_ROW if is_even else "FFFFFF",
+                end_color=ALT_ROW if is_even else "FFFFFF",
+                fill_type="solid",
+            )
+            for offset, col_name in enumerate(headers):
+                col_idx = 2 + offset
+                val = emp_row[col_name]
+                if cal_days == 30 and col_name == "Present Days" and float(val) == 31:
+                    val = 30
+                elif cal_days == 30 and col_name == "Absent" and float(val) == 31:
+                    val = 30
+
+                c = ws.cell(row=r_idx, column=col_idx)
+                c.border = grid_border
+                c.fill = row_fill
+                c.font = Font(name="Calibri", size=10, color=DARK_TEXT)
+                col_clean = col_name.strip()
+
+                if col_clean == "SIGN":
+                    c.value = None
+                elif col_clean == "Date of Resign":
+                    val_str = "" if pd.isna(val) else str(val).strip()
+                    c.value = val_str if val_str else None
+                elif col_clean == "S.No.":
+                    c.value = int(val)
+                    c.number_format = "#,##0"
+                elif col_clean in ("Present Days", "Absent"):
+                    num_v = _format_day_num(val)
+                    c.value = num_v
+                    c.number_format = "#,##0.0" if isinstance(num_v, float) else "#,##0"
+                elif col_clean in (
+                    "Salary / Wages Rate",
+                    "Salary of Month",
+                    "PF Deduction @12%",
+                    "PF Contribution @12%",
+                    "Net Salary of Month",
+                ):
+                    c.value = float(val)
+                    c.number_format = "₹#,##0"
+                else:
+                    c.value = str(val).strip()
+
+        # Add a trailing summary/footer row at Row 21 where S.No. (B21), UAN (C21), and Name (D21) are empty,
+        # followed by some numbers in Salary columns, to prove the cutoff stops cleanly at Row 20!
+        ws.cell(row=21, column=2, value=None)  # S.No. empty
+        ws.cell(row=21, column=3, value=None)  # UAN empty
+        ws.cell(row=21, column=4, value=None)  # Name Of Employee's empty
+        ws.cell(row=21, column=5, value="GRAND TOTAL")
+        ws.cell(row=21, column=10, value=208202)
+
+        ws.column_dimensions["A"].width = 4
+        for offset in range(len(headers)):
+            col_let = get_column_letter(2 + offset)
+            ws.column_dimensions[col_let].width = 16
+
+    wb.remove(default_ws)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
