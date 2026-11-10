@@ -2,8 +2,10 @@
 """Module F: Sample Input Generator for Testing & Demo (sample.py).
 
 Generates a realistic sample employee salary DataFrame and formatted Excel (.xlsx)
-workbook covering DAILY employees, standard MONTHLY employees, and low-attendance
-(0–5 days present) MONTHLY employees.
+workbook matching the exact 14-column input structure:
+S.No. | UAN | Name Of Employee's | Designation | Wages Rate | Salary / Wages Rate |
+Present Days | Absent | Salary of Month | PF Deduction @12% | PF Contribution @12% |
+Net Salary of Month | SIGN | Date of Resign
 """
 
 from __future__ import annotations
@@ -16,14 +18,15 @@ import pandas as pd
 
 
 def create_sample_input_dataframe() -> pd.DataFrame:
-    """Returns a sample employee salary DataFrame for October 2026 matching Section 2,
-    including low-attendance MONTHLY test cases (e.g. 0 to 5 days present).
+    """Returns a sample employee salary DataFrame for October 2026 with the 14-column schema,
+    including DAILY employees, standard MONTHLY employees, and low-attendance (0–5 days) MONTHLY employees.
     """
     return pd.DataFrame([
         {
             "S.No.": 1,
             "UAN": "NA",
             "Name Of Employee's": "Malik Ram",
+            "Designation": "Helper",
             "Wages Rate": "DAILY",
             "Salary / Wages Rate": 484,
             "Present Days": 23,
@@ -33,11 +36,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 11132,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 2,
             "UAN": "NA",
             "Name Of Employee's": "Mithlesh Sahu",
+            "Designation": "Technician",
             "Wages Rate": "DAILY",
             "Salary / Wages Rate": 700,
             "Present Days": 24,
@@ -47,11 +52,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 16800,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 3,
             "UAN": "NA",
             "Name Of Employee's": "OMPRAKASH SONI",
+            "Designation": "Site Manager",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 45000,
             "Present Days": 31,
@@ -61,11 +68,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 45000,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 4,
             "UAN": "NA",
             "Name Of Employee's": "AMIT SHARMA",
+            "Designation": "Supervisor",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 36000,
             "Present Days": 27,
@@ -75,11 +84,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 31355,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 5,
             "UAN": "UAN-101298347612",
             "Name Of Employee's": "Rameshwar Verma",
+            "Designation": "Operator",
             "Wages Rate": "DAILY",
             "Salary / Wages Rate": 550,
             "Present Days": 25,
@@ -89,11 +100,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 1650,
             "Net Salary of Month": 12100,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 6,
             "UAN": "UAN-101456789023",
             "Name Of Employee's": "Sunita Devi",
+            "Designation": "Helper",
             "Wages Rate": "DAILY",
             "Salary / Wages Rate": 484,
             "Present Days": 22,
@@ -103,11 +116,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 1278,
             "Net Salary of Month": 9370,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 7,
             "UAN": "UAN-101892345671",
             "Name Of Employee's": "RAJESHWAR PRASAD",
+            "Designation": "Accountant",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 28000,
             "Present Days": 29,
@@ -117,11 +132,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 1800,
             "Net Salary of Month": 24394,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 8,
             "UAN": "UAN-101983451209",
             "Name Of Employee's": "PRIYA NAIR",
+            "Designation": "Senior Engineer",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 52000,
             "Present Days": 30,
@@ -131,11 +148,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 1800,
             "Net Salary of Month": 48523,
             "SIGN": "",
+            "Date of Resign": "",
         },
         {
             "S.No.": 9,
             "UAN": "NA",
             "Name Of Employee's": "HARI SHANKAR SHARMA",
+            "Designation": "Store Keeper",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 31000,
             "Present Days": 3,
@@ -145,11 +164,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 3000,
             "SIGN": "",
+            "Date of Resign": "2026-10-05",
         },
         {
             "S.No.": 10,
             "UAN": "NA",
-            "Name Of Employee's": " DINESH KUMAR",
+            "Name Of Employee's": "DINESH KUMAR",
+            "Designation": "Office Assistant",
             "Wages Rate": "MONTHLY",
             "Salary / Wages Rate": 24800,
             "Present Days": 0,
@@ -159,12 +180,13 @@ def create_sample_input_dataframe() -> pd.DataFrame:
             "PF Contribution @12%": 0,
             "Net Salary of Month": 0,
             "SIGN": "",
+            "Date of Resign": "",
         },
     ])
 
 
 def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
-    """Builds a formatted sample employee salary input .xlsx file."""
+    """Builds a formatted sample employee salary input .xlsx file with the 14-column structure."""
     if df is None:
         df = create_sample_input_dataframe()
 
@@ -180,12 +202,16 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
     grid_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
     headers = list(df.columns)
+    text_cols = {"UAN", "Name Of Employee's", "Designation", "Date of Resign"}
+    center_cols = {"Wages Rate", "SIGN"}
+
     for col_idx, h_text in enumerate(headers, start=1):
         c = ws.cell(row=1, column=col_idx, value=h_text)
         c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
         c.fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
+        h_clean = h_text.strip()
         c.alignment = Alignment(
-            horizontal="left" if col_idx in (2, 3) else ("center" if col_idx in (4, 12) else "right"),
+            horizontal="left" if h_clean in text_cols else ("center" if h_clean in center_cols else "right"),
             vertical="center",
             wrap_text=True,
         )
@@ -206,15 +232,20 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
             c.border = grid_border
             c.fill = row_fill
             c.font = Font(name="Calibri", size=10)
+            col_clean = col_name.strip()
 
-            if col_name == "SIGN":
+            if col_clean == "SIGN":
                 c.value = None
                 c.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_name in ("S.No.", "Present Days", "Absent"):
+            elif col_clean == "Date of Resign":
+                val_str = "" if pd.isna(val) else str(val).strip()
+                c.value = val_str if val_str else None
+                c.alignment = Alignment(horizontal="left", vertical="center")
+            elif col_clean in ("S.No.", "Present Days", "Absent"):
                 c.value = int(val)
                 c.number_format = "#,##0"
                 c.alignment = Alignment(horizontal="right", vertical="center")
-            elif col_name in (
+            elif col_clean in (
                 "Salary / Wages Rate",
                 "Salary of Month",
                 "PF Deduction @12%",
@@ -224,7 +255,7 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
                 c.value = float(val)
                 c.number_format = "₹#,##0"
                 c.alignment = Alignment(horizontal="right", vertical="center")
-            elif col_name == "Wages Rate":
+            elif col_clean == "Wages Rate":
                 c.value = str(val).strip().upper()
                 c.alignment = Alignment(horizontal="center", vertical="center")
             else:
@@ -234,21 +265,24 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
     ws.freeze_panes = "A2"
 
     col_widths = {
-        1: 8,
-        2: 18,
-        3: 24,
-        4: 14,
-        5: 18,
-        6: 14,
-        7: 12,
-        8: 16,
-        9: 18,
-        10: 20,
-        11: 18,
-        12: 14,
+        1: 8,   # S.No.
+        2: 18,  # UAN
+        3: 24,  # Name Of Employee's
+        4: 18,  # Designation
+        5: 14,  # Wages Rate
+        6: 18,  # Salary / Wages Rate
+        7: 14,  # Present Days
+        8: 12,  # Absent
+        9: 16,  # Salary of Month
+        10: 18, # PF Deduction @12%
+        11: 20, # PF Contribution @12%
+        12: 18, # Net Salary of Month
+        13: 14, # SIGN
+        14: 16, # Date of Resign
     }
     for col_idx, width in col_widths.items():
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
+        if col_idx <= len(headers):
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     buf = io.BytesIO()
     wb.save(buf)

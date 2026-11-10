@@ -5,6 +5,11 @@ Converts a monthly employee salary Excel sheet (.xlsx) into a realistic,
 randomized, Indian-calendar-based monthly attendance register (.xlsx) formatted
 for official record-keeping and printing.
 
+Supported 14-Column Input Excel Structure:
+  S.No. | UAN | Name Of Employee's | Designation | Wages Rate | Salary / Wages Rate |
+  Present Days | Absent | Salary of Month | PF Deduction @12% | PF Contribution @12% |
+  Net Salary of Month | SIGN | Date of Resign
+
 Modular Multi-File Architecture:
   - `calender.py` (Module A): Indian Calendar & Holiday Processing Engine
   - `sample.py`   (Module F): Sample Input Generator (for testing & demo)
@@ -14,7 +19,9 @@ Modular Multi-File Architecture:
                   and Strict Mode)
       * Module D: Randomized Attendance Generation Engine
       * Module E: Professional OpenPyXL Export & Print-Ready Formatting Engine
-      * Module G: Streamlit User Interface (6-Step Interactive Workflow)
+                  (with prominent Company Name heading banner)
+      * Module G: Streamlit User Interface (6-Step Interactive Workflow with Company Name
+                  input and `{Company_Name}_Attendance_Register_{Month}_{Year}.xlsx` download)
 """
 
 from __future__ import annotations
@@ -25,12 +32,14 @@ import datetime
 import io
 import math
 import random
+import re
 from typing import Any
 
 import numpy as np
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
 import pandas as pd
 
 # Import separated modules
@@ -58,6 +67,7 @@ MANDATORY_COLUMN_ALIASES: dict[str, list[str]] = {
     "sno": ["s.no.", "s.no", "sno", "sr.no.", "sr. no.", "serial no"],
     "uan": ["uan", "universal account number", "uan no"],
     "name": ["name of employee's", "name of employees", "name of employee", "employee name", "name"],
+    "designation": ["designation", "post", "role", "job title", "position"],
     "wages_rate_type": ["wages rate", "wage rate", "wage type", "wages type", "category"],
     "base_rate": ["salary / wages rate", "salary/wages rate", "salary / wage rate", "basic salary", "rate"],
     "present_days": ["present days", "present", "total days present", "days present"],
@@ -67,6 +77,7 @@ MANDATORY_COLUMN_ALIASES: dict[str, list[str]] = {
     "pf_contribution": ["pf contribution @12%", "pf contribution", "employer pf"],
     "net_salary": ["net salary of month", "net salary", "net payable"],
     "sign": ["sign", "signature", "employee signature"],
+    "date_of_resign": ["date of resign", "resign date", "date of resignation", "date of leaving", "dol"],
 }
 
 CORE_REQUIRED_KEYS: list[str] = [
@@ -86,7 +97,7 @@ LOW_PRESENT_THRESHOLD: int = 5
 
 
 def resolve_column_mapping(df_columns: list[Any]) -> tuple[dict[str, str], list[str]]:
-    """Maps canonical field keys to actual DataFrame column names."""
+    """Maps canonical field keys to actual DataFrame column names (handling trailing spaces)."""
     normalized_to_actual: dict[str, str] = {}
     for col in df_columns:
         clean_col = " ".join(str(col).strip().lower().split())
@@ -136,6 +147,15 @@ def calculate_per_day_wage(
         return round(float(salary_or_wage_rate), 2)
     else:
         raise ValueError(f"Unsupported Wages Rate category: '{wages_rate_type}'")
+
+
+def format_output_filename(company_name: str, month_name: str, year: int) -> str:
+    """Builds the sanitized output filename: `{Company_Name}_Attendance_Register_{Month}_{Year}.xlsx`."""
+    cleaned_company = re.sub(r"[^\w\s-]", "", str(company_name or "").strip())
+    cleaned_company = re.sub(r"\s+", "_", cleaned_company).strip("_")
+    if not cleaned_company:
+        cleaned_company = "Company"
+    return f"{cleaned_company}_Attendance_Register_{month_name}_{year}.xlsx"
 
 
 # ==============================================================================
@@ -197,6 +217,8 @@ class ValidatedEmployeeRecord:
     per_day_wage: float
     total_wages: float
     accounting_note: str = ""
+    designation: str = ""
+    date_of_resign: str = ""
 
 
 @dataclasses.dataclass
@@ -452,6 +474,23 @@ def validate_employee_dataframe(
 
         per_day_wage = calculate_per_day_wage(wage_type_str, base_rate, total_cal_days)
 
+        # Optional columns from the 14-column input structure (Designation, Date of Resign, UAN)
+        uan_val = ""
+        if "uan" in col_map and not pd.isna(row.get(col_map["uan"])):
+            uan_val = str(row.get(col_map["uan"])).strip()
+
+        designation_val = ""
+        if "designation" in col_map and not pd.isna(row.get(col_map["designation"])):
+            designation_val = str(row.get(col_map["designation"])).strip()
+
+        date_of_resign_val = ""
+        if "date_of_resign" in col_map and not pd.isna(row.get(col_map["date_of_resign"])):
+            raw_dor = row.get(col_map["date_of_resign"])
+            if isinstance(raw_dor, (datetime.date, datetime.datetime)):
+                date_of_resign_val = raw_dor.strftime("%Y-%m-%d")
+            else:
+                date_of_resign_val = str(raw_dor).strip()
+
         # 5. Category-Specific Attendance Mapping (Easy Mode vs Strict Mode)
         active_p = 0
         active_a = 0
@@ -628,10 +667,6 @@ def validate_employee_dataframe(
                     )
                     continue
 
-        uan_val = ""
-        if "uan" in col_map and not pd.isna(row.get(col_map["uan"])):
-            uan_val = str(row.get(col_map["uan"])).strip()
-
         valid_records.append(
             ValidatedEmployeeRecord(
                 row_index=excel_row_num,
@@ -648,6 +683,8 @@ def validate_employee_dataframe(
                 per_day_wage=per_day_wage,
                 total_wages=total_wages,
                 accounting_note=accounting_note,
+                designation=designation_val,
+                date_of_resign=date_of_resign_val,
             )
         )
 
@@ -788,12 +825,39 @@ def generate_attendance_register(
 # MODULE E: PROFESSIONAL OPENPYXL EXPORT & PRINT-READY FORMATTING ENGINE
 # ==============================================================================
 
+def _style_merged_range(
+    ws: openpyxl.worksheet.worksheet.Worksheet,
+    cell_range: str,
+    font: Font | None = None,
+    fill: PatternFill | None = None,
+    alignment: Alignment | None = None,
+    border: Border | None = None,
+) -> None:
+    """Applies consistent styling across all cells in a merged range."""
+    min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+    for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+        for cell in row:
+            if font:
+                cell.font = font
+            if fill:
+                cell.fill = fill
+            if alignment:
+                cell.alignment = alignment
+            if border:
+                cell.border = border
+
+
 def export_attendance_register_to_excel(
     register_df: pd.DataFrame,
     cal_config: MonthCalendarConfig,
+    company_name: str = "COMPANY NAME",
     organization_title: str = "MONTHLY ATTENDANCE & WAGE REGISTER",
 ) -> bytes:
-    """Exports the generated attendance register to a print-ready OpenPyXL .xlsx workbook."""
+    """Exports the generated attendance register to a print-ready OpenPyXL .xlsx workbook.
+
+    Includes a prominent merged Company Name & Month/Year heading banner in Row 1,
+    followed by column headings in Row 2 and employee rows starting at Row 3.
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
     sheet_title = f"{cal_config.month_name}_{cal_config.year}"
@@ -804,7 +868,10 @@ def export_attendance_register_to_excel(
     total_cols = 2 + num_days + 5
     last_col_letter = get_column_letter(total_cols)
 
+    clean_company = str(company_name or "").strip() or "COMPANY NAME"
+
     # Color Palette (Corporate Navy & Clean Ledger Tones)
+    COMPANY_BANNER_BG = "0F2537"
     NAVY_HEADER = "1B365D"
     OFF_HEADER_BG = "78281F"
     DOW_WEEKDAY_BG = "E8EEF5"
@@ -829,7 +896,25 @@ def export_attendance_register_to_excel(
     header_border = Border(left=thin_side, right=thin_side, top=med_navy, bottom=med_navy)
     total_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=double_bottom)
 
-    # ── Row 1: Column Headings (with Day-of-Week stacked inside each date header) ──
+    # ── Row 1: Prominent Company Name & Register Heading Banner ──
+    banner_range = f"A1:{last_col_letter}1"
+    ws.merge_cells(banner_range)
+    ws["A1"].value = (
+        f"{clean_company.upper()} — {organization_title.upper()} "
+        f"({cal_config.month_name.upper()} {cal_config.year})"
+    )
+    _style_merged_range(
+        ws,
+        banner_range,
+        font=Font(name="Calibri", size=14, bold=True, color="FFFFFF"),
+        fill=PatternFill(start_color=COMPANY_BANNER_BG, end_color=COMPANY_BANNER_BG, fill_type="solid"),
+        alignment=Alignment(horizontal="center", vertical="center"),
+        border=header_border,
+    )
+    ws.row_dimensions[1].height = 30
+
+    # ── Row 2: Column Headings (with Day-of-Week stacked inside each date header) ──
+    header_row_idx = 2
     headers = list(register_df.columns)
     header_fill = PatternFill(start_color=NAVY_HEADER, end_color=NAVY_HEADER, fill_type="solid")
     off_header_fill = PatternFill(start_color=OFF_HEADER_BG, end_color=OFF_HEADER_BG, fill_type="solid")
@@ -837,7 +922,7 @@ def export_attendance_register_to_excel(
     date_header_font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
 
     for col_idx, col_name in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx)
+        cell = ws.cell(row=header_row_idx, column=col_idx)
         is_date_col = 3 <= col_idx < (3 + num_days)
         if is_date_col:
             dt = cal_config.all_dates[col_idx - 3]
@@ -858,9 +943,9 @@ def export_attendance_register_to_excel(
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = header_border
 
-    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[header_row_idx].height = 30
 
-    # ── Rows 2..N: Employee Attendance Data Rows ──
+    # ── Rows 3..N: Employee Attendance Data Rows ──
     off_fill = PatternFill(start_color=OFF_CELL_BG, end_color=OFF_CELL_BG, fill_type="solid")
     a_fill = PatternFill(start_color=A_CELL_BG, end_color=A_CELL_BG, fill_type="solid")
     zebra_fill = PatternFill(start_color=ZEBRA_FILL, end_color=ZEBRA_FILL, fill_type="solid")
@@ -872,7 +957,7 @@ def export_attendance_register_to_excel(
     font_a = Font(name="Calibri", size=9, bold=True, color=A_TEXT_COLOR)
     font_off = Font(name="Calibri", size=8, bold=True, color=OFF_TEXT_COLOR)
 
-    start_data_row = 2
+    start_data_row = 3
     for row_offset, (_, emp_row) in enumerate(register_df.iterrows()):
         r_idx = start_data_row + row_offset
         is_even = (row_offset % 2 == 1)
@@ -1005,8 +1090,8 @@ def export_attendance_register_to_excel(
     ws.column_dimensions[get_column_letter(sign_col_idx)].width = 18.0
 
     # ── Freeze Panes & Auto-Filter ──
-    ws.freeze_panes = "C2"
-    ws.auto_filter.ref = f"A1:{last_col_letter}{last_data_row}"
+    ws.freeze_panes = "C3"
+    ws.auto_filter.ref = f"A2:{last_col_letter}{last_data_row}"
 
     # ── Print-Friendly Page Setup & Official Header/Footer ──
     ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
@@ -1014,15 +1099,15 @@ def export_attendance_register_to_excel(
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.oddHeader.center.text = f"{organization_title} — {cal_config.month_name.upper()} {cal_config.year}"
+    ws.oddHeader.center.text = f"{clean_company.upper()} — {organization_title} ({cal_config.month_name.upper()} {cal_config.year})"
     ws.oddHeader.center.size = 12
     ws.oddHeader.center.font = "Calibri,Bold"
     ws.oddFooter.left.text = (
-        f"Calendar Days: {cal_config.total_calendar_days} | "
+        f"Company: {clean_company} | Calendar Days: {cal_config.total_calendar_days} | "
         f"Active Working Days: {cal_config.total_active_working_days} | "
         f"OFF Days: {cal_config.total_off_days}"
     )
-    ws.oddFooter.right.text = "Authorized Signatory: ______________________"
+    ws.oddFooter.right.text = f"For {clean_company} (Authorized Signatory): ______________________"
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -1058,7 +1143,7 @@ def run_streamlit_app() -> None:
             data=sample_bytes,
             file_name="sample_employee_salary_input.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Download a ready-to-use October 2026 sample salary input workbook.",
+            help="Download a ready-to-use October 2026 sample salary input workbook (with Designation & Date of Resign).",
         )
         use_sample_data = st.checkbox("Use built-in October 2026 sample data", value=False)
 
@@ -1123,9 +1208,16 @@ def run_streamlit_app() -> None:
     else:
         st.info("Upload an `.xlsx` file above or check **'Use built-in October 2026 sample data'** in the sidebar to begin.")
 
-    # ── STEP 2: Configure Month and Year ──
-    st.header("Step 2: Configure Month and Year")
-    col_m, col_y = st.columns(2)
+    # ── STEP 2: Configure Company Name, Month and Year ──
+    st.header("Step 2: Configure Company Name, Month and Year")
+    col_comp, col_m, col_y = st.columns([2, 1, 1])
+    with col_comp:
+        company_name_input = st.text_input(
+            "Company Name",
+            value="ABC Enterprises Pvt. Ltd.",
+            placeholder="Enter Company Name (e.g., Shree Balaji Industries)",
+            help="Displayed as the main heading inside the generated Excel sheet and used in the downloaded filename.",
+        )
     month_names = list(calendar.month_name)[1:]
     with col_m:
         selected_month_name = st.selectbox("Select Month", options=month_names, index=9)  # Default October
@@ -1275,6 +1367,7 @@ def run_streamlit_app() -> None:
                 {
                     "S.No.": r.sno,
                     "Name Of Employee's": r.name,
+                    "Designation": r.designation or "-",
                     "Wages Rate": r.wages_rate_type,
                     "Input Rate (₹)": r.base_rate,
                     "Per Day Wage (₹)": r.per_day_wage,
@@ -1284,6 +1377,7 @@ def run_streamlit_app() -> None:
                     "Grid 'A' Cells": r.active_a_days,
                     "Grid 'OFF' Cells": r.off_days_count,
                     "Total Wages (₹)": r.total_wages,
+                    "Date of Resign": r.date_of_resign or "-",
                     "Logic Applied": r.accounting_note,
                 }
                 for r in val_report.valid_records
@@ -1293,9 +1387,16 @@ def run_streamlit_app() -> None:
     # ── STEP 5 & STEP 6: Generate Attendance & Download Excel ──
     st.header("Step 5 & 6: Generate Attendance Register & Download Excel")
     org_banner = st.text_input(
-        "Register Header Title",
+        "Register Subtitle",
         value="MONTHLY ATTENDANCE & WAGE REGISTER",
     )
+
+    target_download_filename = format_output_filename(
+        company_name=company_name_input,
+        month_name=cal_config.month_name,
+        year=cal_config.year,
+    )
+    st.caption(f"📄 Output file will be saved as: **`{target_download_filename}`**")
 
     generate_clicked = st.button(
         "🚀 Generate Attendance Register",
@@ -1314,16 +1415,19 @@ def run_streamlit_app() -> None:
         excel_bytes = export_attendance_register_to_excel(
             register_df=register_df,
             cal_config=cal_config,
+            company_name=company_name_input,
             organization_title=org_banner,
         )
         st.session_state["generated_register_df"] = register_df
         st.session_state["generated_excel_bytes"] = excel_bytes
-        st.session_state["generated_filename"] = (
-            f"Attendance_Register_{cal_config.month_name}_{cal_config.year}.xlsx"
-        )
+        st.session_state["generated_company_name"] = company_name_input.strip() or "COMPANY NAME"
+        st.session_state["generated_filename"] = target_download_filename
 
     if "generated_register_df" in st.session_state and val_report.is_valid:
-        st.subheader("📋 Generated Attendance Register Preview")
+        st.subheader(
+            f"📋 {st.session_state.get('generated_company_name', company_name_input)} — "
+            f"Attendance Register ({cal_config.month_name} {cal_config.year})"
+        )
         st.dataframe(st.session_state["generated_register_df"], width="stretch")
 
         st.download_button(
