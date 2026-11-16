@@ -2,19 +2,14 @@
 """Module F: Sample Input Generator for Testing & Demo (sample.py).
 
 Generates:
-  1. Single-Sheet 14-Column Sample Input Excel (`export_sample_input_to_excel`):
-     Includes DAILY employees, MONTHLY employees, half-day (`P/2`, e.g., `20.5` Present Days)
-     employees, and low-attendance (`0–5` days) MONTHLY employees.
-  2. Multi-Sheet Bulk Sample Input Excel (`export_bulk_sample_input_to_excel`):
-     Sheets named `{MMM YY}` (`JAN 24`, `APR 25`, `OCT 26`), Company Name in cell `D2`,
-     headers in `B10:O10`, employee data rows in `B11:O{n}`, plus trailing summary rows
-     where `S.No.`, `UAN`, and `Name Of Employee's` are empty to verify the strict cutoff rule.
+  1. Single-Sheet 14-Column Sample Input Excel (`export_sample_input_to_excel`)
+  2. Multi-Sheet Bulk Sample Input Excel (`export_bulk_sample_input_to_excel`)
+  3. Sample EPF ECR DataFrame (`create_sample_ecr_dataframe`) matching `example.pdf`
 """
 
 from __future__ import annotations
 
 import io
-import math
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -25,6 +20,22 @@ def _format_day_num(val: float | int) -> float | int:
     """Returns int if val is a whole number, or float (x.5) if half day."""
     f = float(val)
     return int(round(f)) if abs(f - round(f)) < 1e-6 else round(f, 1)
+
+
+def create_sample_ecr_dataframe() -> pd.DataFrame:
+    """Returns the 10-employee EPF ECR dataset from `example.pdf` (AMBIKA PROJECTS, AUG-2021)."""
+    return pd.DataFrame([
+        {"Sl. No.": 1, "UAN": "101719352698", "Name as per – ECR": "BHUVAN LAL YADAV", "Name as per – UAN Repository": "BHUVAN LAL YADAV", "Wages – Gross": 9702.0, "Wages – EPF": 9702.0, "Wages – EPS": 0.0, "Wages – EDLI": 9702.0, "Contribution Remitted – EE": 1164.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1164.0, "NCP Days": 13, "Refunds": 0.0},
+        {"Sl. No.": 2, "UAN": "101631365755", "Name as per – ECR": "DEVRAJ SHARMA", "Name as per – UAN Repository": "DEVRAJ SHARMA", "Wages – Gross": 9702.0, "Wages – EPF": 9702.0, "Wages – EPS": 0.0, "Wages – EDLI": 9702.0, "Contribution Remitted – EE": 1164.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1164.0, "NCP Days": 13, "Refunds": 0.0},
+        {"Sl. No.": 3, "UAN": "101719352679", "Name as per – ECR": "GULSHAN KUMAR", "Name as per – UAN Repository": "GULSHAN KUMAR", "Wages – Gross": 9163.0, "Wages – EPF": 9163.0, "Wages – EPS": 0.0, "Wages – EDLI": 9163.0, "Contribution Remitted – EE": 1100.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1100.0, "NCP Days": 14, "Refunds": 0.0},
+        {"Sl. No.": 4, "UAN": "101631365740", "Name as per – ECR": "PRABHU PRAJAPATI", "Name as per – UAN Repository": "PRABHU PRAJAPATI", "Wages – Gross": 10780.0, "Wages – EPF": 10780.0, "Wages – EPS": 0.0, "Wages – EDLI": 10780.0, "Contribution Remitted – EE": 1294.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1294.0, "NCP Days": 11, "Refunds": 0.0},
+        {"Sl. No.": 5, "UAN": "101719352680", "Name as per – ECR": "RAKESH KUMAR SINGH", "Name as per – UAN Repository": "RAKESH KUMAR SINGH", "Wages – Gross": 12255.0, "Wages – EPF": 12255.0, "Wages – EPS": 0.0, "Wages – EDLI": 12255.0, "Contribution Remitted – EE": 1471.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1471.0, "NCP Days": 12, "Refunds": 0.0},
+        {"Sl. No.": 6, "UAN": "101631374956", "Name as per – ECR": "SHASHI KANT DIXIT", "Name as per – UAN Repository": "SHASHI KANT DIXIT", "Wages – Gross": 13545.0, "Wages – EPF": 13545.0, "Wages – EPS": 0.0, "Wages – EDLI": 13545.0, "Contribution Remitted – EE": 1625.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1625.0, "NCP Days": 10, "Refunds": 0.0},
+        {"Sl. No.": 7, "UAN": "101631365786", "Name as per – ECR": "SHIV KUMAR SINGH", "Name as per – UAN Repository": "SHIV KUMAR SINGH", "Wages – Gross": 12255.0, "Wages – EPF": 12255.0, "Wages – EPS": 0.0, "Wages – EDLI": 12255.0, "Contribution Remitted – EE": 1471.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1471.0, "NCP Days": 12, "Refunds": 0.0},
+        {"Sl. No.": 8, "UAN": "101719352651", "Name as per – ECR": "SHRAVAN KUMAR YADAV", "Name as per – UAN Repository": "SHRAVAN KUMAR YADAV", "Wages – Gross": 10241.0, "Wages – EPF": 10241.0, "Wages – EPS": 0.0, "Wages – EDLI": 10241.0, "Contribution Remitted – EE": 1229.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1229.0, "NCP Days": 12, "Refunds": 0.0},
+        {"Sl. No.": 9, "UAN": "101631365764", "Name as per – ECR": "VINOD KUMAR", "Name as per – UAN Repository": "VINOD KUMAR", "Wages – Gross": 12397.0, "Wages – EPF": 12397.0, "Wages – EPS": 0.0, "Wages – EDLI": 12397.0, "Contribution Remitted – EE": 1488.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1488.0, "NCP Days": 8, "Refunds": 0.0},
+        {"Sl. No.": 10, "UAN": "101719352701", "Name as per – ECR": "ZAFRULLAH ALAM", "Name as per – UAN Repository": "ZAFRULLAH ALAM", "Wages – Gross": 11610.0, "Wages – EPF": 11610.0, "Wages – EPS": 0.0, "Wages – EDLI": 11610.0, "Contribution Remitted – EE": 1393.0, "Contribution Remitted – EPS": 0.0, "Contribution Remitted – ER": 1393.0, "NCP Days": 13, "Refunds": 0.0},
+    ])
 
 
 def create_sample_input_dataframe() -> pd.DataFrame:
@@ -308,14 +319,7 @@ def export_sample_input_to_excel(df: pd.DataFrame | None = None) -> bytes:
 def export_bulk_sample_input_to_excel(
     company_name: str = "Shree Balaji Industries Pvt. Ltd.",
 ) -> bytes:
-    """Builds a multi-sheet Bulk Upload sample workbook matching the exact bulk layout:
-      - Sheet names in `{MMM YY}` format (`JAN 24`, `APR 25`, `OCT 26`)
-      - Cell `D2`: Company Name (`Shree Balaji Industries Pvt. Ltd.`)
-      - Cells `B10:O10`: 14 column headers (`S.No.` in B10 through `Date of Resign` in O10)
-      - Cells `B11:O20`: Employee data rows
-      - Cells `B21:O23`: Empty / trailing summary rows (where B, C, D are empty) to verify
-        that the bulk extractor stops immediately at the first row where S.No., UAN, and Name are empty.
-    """
+    """Builds a multi-sheet Bulk Upload sample workbook matching the exact bulk layout."""
     wb = openpyxl.Workbook()
     default_ws = wb.active
 
@@ -339,7 +343,6 @@ def export_bulk_sample_input_to_excel(
         ws = wb.create_sheet(title=sheet_title)
         ws.views.sheetView[0].showGridLines = True
 
-        # Place Company Name in D2 (and a label in C2)
         ws["C2"] = "Company Name:"
         ws["C2"].font = Font(name="Calibri", size=11, bold=True, color=DARK_TEXT)
         ws["D2"] = company_name
@@ -350,9 +353,8 @@ def export_bulk_sample_input_to_excel(
         ws["D4"] = sheet_title
         ws["D4"].font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
 
-        # Write 14 headers in B10:O10 (columns 2..15)
         for offset, h_text in enumerate(headers):
-            col_idx = 2 + offset  # B is column 2, O is column 15
+            col_idx = 2 + offset
             c = ws.cell(row=10, column=col_idx, value=h_text)
             c.font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
             c.fill = PatternFill(start_color=HEADER_LIGHT_BG, end_color=HEADER_LIGHT_BG, fill_type="solid")
@@ -360,7 +362,6 @@ def export_bulk_sample_input_to_excel(
             c.border = grid_border
         ws.row_dimensions[10].height = 24
 
-        # Write employee rows in B11:O20
         for r_idx, (_, emp_row) in enumerate(base_df.iterrows(), start=11):
             ws.row_dimensions[r_idx].height = 20
             is_even = (r_idx % 2 == 0)
@@ -407,11 +408,9 @@ def export_bulk_sample_input_to_excel(
                 else:
                     c.value = str(val).strip()
 
-        # Add a trailing summary/footer row at Row 21 where S.No. (B21), UAN (C21), and Name (D21) are empty,
-        # followed by some numbers in Salary columns, to prove the cutoff stops cleanly at Row 20!
-        ws.cell(row=21, column=2, value=None)  # S.No. empty
-        ws.cell(row=21, column=3, value=None)  # UAN empty
-        ws.cell(row=21, column=4, value=None)  # Name Of Employee's empty
+        ws.cell(row=21, column=2, value=None)
+        ws.cell(row=21, column=3, value=None)
+        ws.cell(row=21, column=4, value=None)
         ws.cell(row=21, column=5, value="GRAND TOTAL")
         ws.cell(row=21, column=10, value=208202)
 

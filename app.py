@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """Mock Attendance Register Generator – Streamlit Application (app.py).
 
-Converts a monthly employee salary Excel sheet (.xlsx) into a realistic,
-randomized, Indian-calendar-based monthly attendance register (.xlsx) formatted
-for official record-keeping and printing.
+Converts a monthly employee salary Excel sheet (.xlsx) or an EPF Electronic
+Challan cum Return (ECR) PDF statement (.pdf) into a realistic, randomized,
+Indian-calendar-based monthly attendance register (.xlsx) formatted for official
+record-keeping and printing.
 
-Key Features:
-  1. Print-Friendly Light Shades & Dark Fonts:
-     - Company Name banner, column headers, and totals use crisp light fills with bold dark text.
-     - Sunday & Holiday (`OFF`) headers and cells use soft light-red/rose shades with dark text.
-     - Half-day (`P/2`) cells use a subtle light-yellow tint with dark text.
-  2. Half-Day (`P/2`) Attendance Support:
-     - Supports `.5` decimal values in `Present Days` (e.g., `20.5`, `26.5`, `3.5`) and `Absent`.
-     - Places the exact number of full `'P'` days plus `'P/2'` on a random active working day when
-       a `.5` half-day is present, and calculates wages accordingly (`Present Days * Per-Day Wage`).
-  3. Strict 3-Key Bulk Row Cutoff (`['S.No.', 'UAN', "Name Of Employee's"]`):
-     - In `Easy (Bulk)` mode, checks `S.No.`, `UAN`, and `Name Of Employee's` on each row starting
-       from `B11:O11`. As long as at least one of those 3 fields is non-empty, the row is kept;
-       the moment a row has all 3 fields empty, extraction cuts off immediately and selects only
-       the preceding rows.
-  4. Highlighted Total Salary Card in UI:
-     - Displays a distinct colored Total Salary (Total Wages SUM) card right beside the Download
-       Excel button once the attendance register is generated (in both Single and Bulk modes).
+Supported Modes in Sidebar:
+  1. Easy (Single) [Default]: Single-sheet Excel upload (headers on Row 1).
+  2. Easy (Bulk): Multi-sheet or raw-grid Excel upload (`D2` Company Name,
+     `{MMM YY}` sheet names, `B10:O10` headers, and strict 3-key cutoff on
+     `['S.No.', 'UAN', "Name Of Employee's"]`).
+  3. PDF Mode (EPF ECR): Extracts `Name of Establishment` and `Return Month`
+     (`MMM-YYYY`, e.g. `AUG-2021`) from Page 1, checks Pages 2..n for the
+     Member Details table (works for 2-page PDFs as well as multi-page PDFs),
+     outputs clean register columns (`S.No.`, `Name Of Employee's`, `1..30/31`,
+     `Total Wages` directly from `Wages – EPF`, `SIGN`), and supports a
+     preset/custom Present Days range (`n` to `m`) when `NCP Days <= 0`.
+  4. Strict Mode: Single-sheet Excel upload with strict calendar math checks.
 """
 
 from __future__ import annotations
@@ -43,6 +39,14 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
 import pandas as pd
 
+# Optional PDF parsing library imports
+try:
+    import pdfplumber  # type: ignore
+    HAS_PDFPLUMBER = True
+except ImportError:
+    pdfplumber = None
+    HAS_PDFPLUMBER = False
+
 # Import separated modules
 from calender import (
     FIXED_HOLIDAYS,
@@ -55,6 +59,7 @@ from calender import (
     infer_target_off_days_from_df,
 )
 from sample import (
+    create_sample_ecr_dataframe,
     create_sample_input_dataframe,
     export_bulk_sample_input_to_excel,
     export_sample_input_to_excel,
@@ -62,19 +67,29 @@ from sample import (
 
 
 # ==============================================================================
-# MODULE B: PREPROCESSING, BULK EXTRACTION & PER-DAY WAGE CALCULATION ENGINE
+# MODULE B: PREPROCESSING, BULK/PDF EXTRACTION & PER-DAY WAGE CALCULATION ENGINE
 # ==============================================================================
 
 MANDATORY_COLUMN_ALIASES: dict[str, list[str]] = {
-    "sno": ["s.no.", "s.no", "sno", "sr.no.", "sr. no.", "serial no"],
+    "sno": ["s.no.", "s.no", "sno", "sr.no.", "sr. no.", "serial no", "sl. no.", "sl. no", "sl no"],
     "uan": ["uan", "universal account number", "uan no"],
-    "name": ["name of employee's", "name of employees", "name of employee", "employee name", "name"],
+    "name": [
+        "name of employee's",
+        "name of employees",
+        "name of employee",
+        "employee name",
+        "name",
+        "name as per – uan repository",
+        "name as per - uan repository",
+        "name as per uan repository",
+    ],
     "designation": ["designation", "post", "role", "job title", "position"],
     "wages_rate_type": ["wages rate", "wage rate", "wage type", "wages type", "category"],
     "base_rate": ["salary / wages rate", "salary/wages rate", "salary / wage rate", "basic salary", "rate"],
     "present_days": ["present days", "present", "total days present", "days present"],
-    "absent_days": ["absent", "absent days", "total absent days", "days absent"],
+    "absent_days": ["absent", "absent days", "total absent days", "days absent", "ncp days"],
     "salary_of_month": ["salary of month", "total wages", "gross salary", "monthly salary", "total salary"],
+    "wages_epf": ["wages – epf", "wages - epf", "wages epf", "epf wages", "epf"],
     "pf_deduction": ["pf deduction @12%", "pf deduction", "employee pf"],
     "pf_contribution": ["pf contribution @12%", "pf contribution", "employer pf"],
     "net_salary": ["net salary of month", "net salary", "net payable"],
@@ -119,7 +134,7 @@ def format_day_count(val: float | int) -> int | float:
 
 
 def parse_sheet_month_year(sheet_name: str) -> tuple[int, int] | None:
-    """Parses a sheet name like 'JAN 24', 'APR 25', 'OCT-2026', 'March_23' into (month_int, year_int)."""
+    """Parses a month-year string like 'JAN 24', 'APR 25', 'AUG-2021', 'OCT-2026' into (month_int, year_int)."""
     cleaned = str(sheet_name or "").strip().upper()
     match = re.search(r"\b([A-Z]{3,9})[\s\-_\/\.']*(\d{2}|\d{4})\b", cleaned)
     if not match:
@@ -145,6 +160,343 @@ def _is_cell_non_empty(val: Any) -> bool:
     return len(str(val).strip()) > 0
 
 
+@dataclasses.dataclass
+class EcrPdfExtractionResult:
+    """Holds the extracted metadata and member table from an EPF ECR PDF file."""
+    company_name: str
+    return_month_str: str
+    wage_month_str: str
+    parsed_month: int
+    parsed_year: int
+    total_pages: int
+    member_pages_processed: list[int]
+    raw_member_df: pd.DataFrame
+
+
+def _is_member_details_table(tbl: list[list[Any]]) -> bool:
+    """Checks whether an extracted PDF table is an EPF ECR Member Details table."""
+    if not tbl:
+        return False
+    # Check header rows for ECR member table keywords (and exclude Reason Code remarks tables)
+    header_text = " ".join(
+        str(cell).strip().lower()
+        for row in tbl[:3]
+        if row
+        for cell in row
+        if cell is not None
+    )
+    if "reason code" in header_text and "reason name" in header_text:
+        return False
+    if any(k in header_text for k in ("ncp", "uan", "sl. no", "repository", "remitted")):
+        return True
+    # Also accept continuation pages without repeated headers if rows have >= 12 cols & numeric Sl. No.
+    for row in tbl:
+        if row and len(row) >= 12 and row[0] is not None and re.match(r"^\d+$", str(row[0]).strip()):
+            return True
+    return False
+
+
+def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
+    """Extracts Establishment Name, Return Month (MMM-YYYY), and Member Details from an EPF ECR PDF.
+
+    Rules:
+      - Page 1: Extracts `Name of Establishment` and `Return Month` (e.g. `AUG-2021`).
+      - Pages 2..n: Inspects every page after Page 1 for a Member Details table (works
+        whether the PDF has 2 pages, 3 pages with remarks on page 3, or many member pages),
+        extracting only genuine Member Details rows and ignoring remarks/reason-code tables.
+    """
+    if not HAS_PDFPLUMBER or pdfplumber is None:
+        raise RuntimeError(
+            "The 'pdfplumber' library is required for PDF Mode. Please run `pip install pdfplumber`."
+        )
+
+    if isinstance(pdf_source, (bytes, bytearray)):
+        pdf_file_obj = io.BytesIO(pdf_source)
+    elif hasattr(pdf_source, "seek"):
+        pdf_source.seek(0)
+        pdf_file_obj = pdf_source
+    else:
+        pdf_file_obj = pdf_source
+
+    company_name = ""
+    return_month_str = ""
+    wage_month_str = ""
+    member_rows: list[dict[str, Any]] = []
+    member_pages_processed: list[int] = []
+
+    with pdfplumber.open(pdf_file_obj) as pdf:
+        total_pages = len(pdf.pages)
+        if total_pages == 0:
+            raise ValueError("Uploaded PDF has 0 pages.")
+
+        # ── 1. Page 1: Extract Name of Establishment & Return Month ──
+        p1 = pdf.pages[0]
+        p1_tables = p1.extract_tables() or []
+        for tbl in p1_tables:
+            for row in tbl:
+                if not row:
+                    continue
+                for idx_c, cell_val in enumerate(row):
+                    if not cell_val:
+                        continue
+                    label_clean = " ".join(str(cell_val).strip().lower().split())
+                    if "name of establishment" in label_clean:
+                        for next_val in row[idx_c + 1:]:
+                            if next_val and str(next_val).strip():
+                                company_name = " ".join(str(next_val).strip().split())
+                                break
+                    elif "return month" in label_clean:
+                        for next_val in row[idx_c + 1:]:
+                            if next_val and str(next_val).strip():
+                                return_month_str = " ".join(str(next_val).strip().split())
+                                break
+                    elif "wage month" in label_clean:
+                        for next_val in row[idx_c + 1:]:
+                            if next_val and str(next_val).strip():
+                                wage_month_str = " ".join(str(next_val).strip().split())
+                                break
+
+        p1_text = p1.extract_text() or ""
+        if not company_name:
+            m_comp = re.search(r"Name of Establishment\s+([A-Z0-9\s\.\&\-\(\),]+)", p1_text)
+            if m_comp:
+                company_name = m_comp.group(1).strip().splitlines()[0].strip()
+        if not return_month_str:
+            m_ret = re.search(r"Return Month\s*[:\-]?\s*([A-Za-z]{3,9}[\s\-_\/]\d{2,4})", p1_text)
+            if m_ret:
+                return_month_str = m_ret.group(1).strip()
+
+        # ── 2. Pages 2..n: Check every page for a Member Details table ──
+        for p_idx in range(1, total_pages):
+            page = pdf.pages[p_idx]
+            tables = page.extract_tables() or []
+            page_had_members = False
+
+            for tbl in tables:
+                if not _is_member_details_table(tbl):
+                    continue
+
+                for row in tbl:
+                    if not row or len(row) < 12:
+                        continue
+                    first_cell = "" if row[0] is None else str(row[0]).strip()
+                    if not first_cell or not re.match(r"^\d+$", first_cell):
+                        continue
+
+                    sl_no = int(first_cell)
+                    uan = " ".join(str(row[1] or "").strip().split())
+                    name_ecr = " ".join(str(row[2] or "").strip().split())
+                    name_uan_repo = " ".join(str(row[3] or "").strip().split()) or name_ecr
+
+                    def _clean_num(v: Any) -> float:
+                        if v is None:
+                            return 0.0
+                        s = str(v).replace(",", "").replace("₹", "").strip()
+                        if not s or s == "-":
+                            return 0.0
+                        try:
+                            return float(s)
+                        except ValueError:
+                            return 0.0
+
+                    wages_gross = _clean_num(row[4])
+                    wages_epf = _clean_num(row[5])
+                    wages_eps = _clean_num(row[6])
+                    wages_edli = _clean_num(row[7])
+                    contrib_ee = _clean_num(row[8])
+                    contrib_eps = _clean_num(row[9])
+                    contrib_er = _clean_num(row[10])
+                    ncp_days = format_day_count(_clean_num(row[11]))
+                    refunds = _clean_num(row[12]) if len(row) > 12 else 0.0
+                    pmrpy_pension = str(row[13] or "-").strip() if len(row) > 13 else "-"
+                    pmrpy_er = str(row[14] or "-").strip() if len(row) > 14 else "-"
+                    pmrpy_ee = str(row[15] or "-").strip() if len(row) > 15 else "-"
+                    posting_loc = " ".join(str(row[16] or "N.A.").strip().split()) if len(row) > 16 else "N.A."
+
+                    member_rows.append({
+                        "Sl. No.": sl_no,
+                        "UAN": uan,
+                        "Name as per – ECR": name_ecr,
+                        "Name as per – UAN Repository": name_uan_repo,
+                        "Wages – Gross": wages_gross,
+                        "Wages – EPF": wages_epf,
+                        "Wages – EPS": wages_eps,
+                        "Wages – EDLI": wages_edli,
+                        "Contribution Remitted – EE": contrib_ee,
+                        "Contribution Remitted – EPS": contrib_eps,
+                        "Contribution Remitted – ER": contrib_er,
+                        "NCP Days": ncp_days,
+                        "Refunds": refunds,
+                        "PMRPY / ABRY Benefit – Pension Share": pmrpy_pension,
+                        "PMRPY / ABRY Benefit – ER PF Share": pmrpy_er,
+                        "PMRPY / ABRY Benefit – EE Share": pmrpy_ee,
+                        "Posting Location of the Member": posting_loc,
+                    })
+                    page_had_members = True
+
+            if page_had_members:
+                member_pages_processed.append(p_idx + 1)
+
+    parsed_my = parse_sheet_month_year(return_month_str) or parse_sheet_month_year(wage_month_str)
+    if parsed_my is not None:
+        parsed_month, parsed_year = parsed_my
+    else:
+        parsed_month, parsed_year = 8, 2021
+
+    return EcrPdfExtractionResult(
+        company_name=company_name or "AMBIKA PROJECTS",
+        return_month_str=return_month_str or f"{calendar.month_abbr[parsed_month].upper()}-{parsed_year}",
+        wage_month_str=wage_month_str,
+        parsed_month=parsed_month,
+        parsed_year=parsed_year,
+        total_pages=total_pages,
+        member_pages_processed=member_pages_processed,
+        raw_member_df=pd.DataFrame(member_rows),
+    )
+
+
+def all_ecr_ncp_non_positive(ecr_df: pd.DataFrame) -> bool:
+    """Returns True if every employee in the ECR DataFrame has NCP Days <= 0."""
+    if ecr_df.empty or "NCP Days" not in ecr_df.columns:
+        return False
+    for val in ecr_df["NCP Days"]:
+        parsed, err = _parse_non_negative_day_value(val)
+        if err is not None:
+            # Handle negative numbers explicitly if any
+            try:
+                if float(str(val).replace(",", "").strip()) > 0:
+                    return False
+            except ValueError:
+                return False
+        elif parsed is not None and parsed > 0:
+            return False
+    return True
+
+
+def build_records_from_ecr_dataframe(
+    ecr_df: pd.DataFrame,
+    cal_config: MonthCalendarConfig,
+    present_range: tuple[int, int] | None = None,
+    seed: int | None = None,
+) -> ValidationReport:
+    """Converts extracted EPF ECR Member Details into ValidatedEmployeeRecord objects.
+
+    Simplified PDF Mode Rules:
+      - `S.No.`              = `Sl. No.`
+      - `Name Of Employee's` = `Name as per – UAN Repository`
+      - `Total Wages`        = Directly copied from `Wages – EPF` (no Per Day Wage calculation)
+      - Attendance Grid:
+          * When `present_range=(n, m)` is active (e.g. when `NCP Days <= 0` for everyone),
+            randomly picks an integer Present day count in `[n, m]` for each employee
+            (e.g. 10, 12, 11, 14, 15) and marks the remaining active working days as `A`.
+          * Otherwise, `Present = Active Working Days - NCP Days`, `Absent = NCP Days`.
+      - Final Output Columns in PDF Mode:
+          `S.No.` | `Name Of Employee's` | `1`..`N` | `Total Wages` | `SIGN`
+    """
+    if ecr_df.empty:
+        return ValidationReport(
+            is_valid=False,
+            missing_columns=[],
+            valid_records=[],
+            errors=[
+                EmployeeValidationError(
+                    row_index=0,
+                    sno="-",
+                    employee_name="Empty Member Table",
+                    wages_rate_type="ECR PDF",
+                    error_field="Member Details",
+                    message="No employee records were found in the Member Details pages of the PDF.",
+                    remediation="Verify that the uploaded PDF is a valid EPF Electronic Challan cum Return (ECR).",
+                )
+            ],
+            warnings=[],
+        )
+
+    active_work_days = cal_config.total_active_working_days
+    off_days = cal_config.total_off_days
+    valid_records: list[ValidatedEmployeeRecord] = []
+    errors: list[EmployeeValidationError] = []
+    warnings: list[EmployeeValidationError] = []
+    range_rng = random.Random(seed)
+
+    for idx, row in ecr_df.iterrows():
+        sl_no = row.get("Sl. No.", idx + 1)
+        uan_str = str(row.get("UAN", "") or "").strip()
+        emp_name = str(
+            row.get("Name as per – UAN Repository")
+            or row.get("Name as per – ECR")
+            or ""
+        ).strip()
+
+        if not emp_name:
+            continue
+
+        wages_epf_val, w_err = _parse_positive_float(row.get("Wages – EPF", 0.0))
+        if w_err or wages_epf_val is None:
+            wages_epf_val = 0.0
+
+        ncp_raw = row.get("NCP Days", 0)
+        try:
+            ncp_float = float(str(ncp_raw).replace(",", "").strip())
+        except (ValueError, TypeError):
+            ncp_float = 0.0
+
+        if present_range is not None and ncp_float <= 0:
+            r_min = max(0, min(int(present_range[0]), active_work_days))
+            r_max = max(r_min, min(int(present_range[1]), active_work_days))
+            chosen_present = range_rng.randint(r_min, r_max)
+            raw_present_days = float(chosen_present)
+            ncp_days_val = float(active_work_days - chosen_present)
+            range_note = f"Range ({r_min}–{r_max}) -> Randomized {chosen_present} 'P', {int(ncp_days_val)} 'A'"
+        else:
+            ncp_days_val = max(0.0, ncp_float)
+            raw_present_days = max(0.0, float(active_work_days) - ncp_days_val)
+            range_note = f"Active ({active_work_days}) - NCP ({format_day_count(ncp_days_val)}) = {format_day_count(raw_present_days)} 'P'"
+
+        present_fmt = format_day_count(raw_present_days)
+        absent_fmt = format_day_count(ncp_days_val)
+        total_wages = round(float(wages_epf_val), 2)
+
+        active_p, active_half_p, active_a = _split_target_present_into_grid_counts(
+            raw_present_days, active_work_days
+        )
+        half_note = f", {active_half_p} 'P/2'" if active_half_p else ""
+
+        accounting_note = (
+            f"PDF ECR Mode: {range_note} ({active_p} 'P'{half_note}, {active_a} 'A', {off_days} 'OFF'). "
+            f"Total Wages = ₹{total_wages:,.2f} (copied directly from Wages – EPF)."
+        )
+
+        valid_records.append(
+            ValidatedEmployeeRecord(
+                row_index=int(idx) + 1 if isinstance(idx, (int, np.integer)) else len(valid_records) + 1,
+                sno=sl_no,
+                uan=uan_str,
+                name=emp_name,
+                wages_rate_type="ECR_PDF",
+                base_rate=total_wages,
+                input_present_days=present_fmt,
+                input_absent_days=absent_fmt,
+                active_p_days=active_p,
+                active_half_p_days=active_half_p,
+                active_a_days=active_a,
+                off_days_count=off_days,
+                per_day_wage=0.0,
+                total_wages=total_wages,
+                accounting_note=accounting_note,
+                pdf_minimal_output=True,
+            )
+        )
+
+    return ValidationReport(
+        is_valid=len(valid_records) > 0 and len(errors) == 0,
+        missing_columns=[],
+        valid_records=valid_records,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
 def extract_bulk_sheet_data(
     excel_source: Any,
     sheet_name: str,
@@ -154,15 +506,7 @@ def extract_bulk_sheet_data(
     company_cell: str = "D2",
     auto_detect_headers: bool = True,
 ) -> tuple[pd.DataFrame, str]:
-    """Extracts the employee table and company name from a raw bulk-formatted worksheet.
-
-    Strict 3-Column Row Cutoff Rule:
-      - Checks the three identity columns: `['S.No.', 'UAN', "Name Of Employee's"]`.
-      - Starting from `header_row + 1` (e.g., Row 11), if ANY of these 3 columns has a value,
-        the row is selected and kept on standby.
-      - The moment a row is encountered where ALL 3 of `['S.No.', 'UAN', "Name Of Employee's"]`
-        are empty, scanning cuts off immediately and returns only the rows collected before that point.
-    """
+    """Extracts the employee table and company name from a raw bulk-formatted worksheet."""
     if isinstance(excel_source, (bytes, bytearray)):
         wb = openpyxl.load_workbook(io.BytesIO(excel_source), data_only=True)
     elif hasattr(excel_source, "seek"):
@@ -173,7 +517,6 @@ def extract_bulk_sheet_data(
 
     ws = wb[sheet_name]
 
-    # 1. Extract Company Name from company_cell (default D2)
     extracted_company = ""
     try:
         c_row, c_col = coordinate_to_tuple(company_cell.strip().upper())
@@ -183,7 +526,6 @@ def extract_bulk_sheet_data(
     except Exception:
         pass
 
-    # 2. Determine column indices and header row
     start_col_idx = column_index_from_string(start_col_letter.strip().upper())
     end_col_idx = column_index_from_string(end_col_letter.strip().upper())
     if start_col_idx > end_col_idx:
@@ -224,7 +566,6 @@ def extract_bulk_sheet_data(
         else:
             headers.append(str(h_val).strip())
 
-    # Identify the column positions (0-based within headers) for ['S.No.', 'UAN', "Name Of Employee's"]
     col_map_temp, _ = resolve_column_mapping(headers)
     key_col_names = [
         col_map_temp.get("sno"),
@@ -237,9 +578,6 @@ def extract_bulk_sheet_data(
     if not key_col_indices:
         key_col_indices = [i for i in (0, 1, 2) if i < len(headers)]
 
-    # 3. Extract employee rows starting at target_h_row + 1:
-    #    Check ['S.No.', 'UAN', "Name Of Employee's"]. If ANY of the 3 is non-empty, select the row.
-    #    As soon as a row has ALL 3 empty, cut off immediately and return all previously selected rows!
     standby_rows: list[dict[str, Any]] = []
 
     for r_idx in range(target_h_row + 1, ws.max_row + 1):
@@ -305,12 +643,7 @@ def calculate_per_day_wage(
     salary_or_wage_rate: float,
     total_calendar_days: int,
 ) -> float:
-    """Calculates per-day wage based on employee wage category.
-
-    Rules (Section 5.C):
-      - MONTHLY employees: Per-day wage = Salary / Wages Rate ÷ Total Calendar Days
-      - DAILY employees:   Per-day wage = Salary / Wages Rate (do NOT divide by calendar days)
-    """
+    """Calculates per-day wage based on employee wage category."""
     category = str(wages_rate_type).strip().upper()
     if category == "MONTHLY":
         if total_calendar_days <= 0:
@@ -340,6 +673,7 @@ class ValidationMode:
     EASY_MODE = "EASY_MODE"
     EASY_SINGLE = "EASY_SINGLE"
     EASY_BULK = "EASY_BULK"
+    PDF_MODE = "PDF_MODE"
     STRICT_MODE = "STRICT_MODE"
 
 
@@ -358,7 +692,7 @@ class ValidatedEmployeeRecord:
     sno: Any
     uan: str
     name: str
-    wages_rate_type: str            # "MONTHLY" or "DAILY"
+    wages_rate_type: str            # "MONTHLY", "DAILY", or "ECR_PDF"
     base_rate: float
     input_present_days: float | int # Can be whole (e.g. 23) or half-day (e.g. 20.5)
     input_absent_days: float | int  # Can be whole (e.g. 3) or half-day (e.g. 5.5)
@@ -371,6 +705,7 @@ class ValidatedEmployeeRecord:
     accounting_note: str = ""
     designation: str = ""
     date_of_resign: str = ""
+    pdf_minimal_output: bool = False
 
 
 @dataclasses.dataclass
@@ -890,7 +1225,7 @@ def validate_employee_dataframe(
 
 
 # ==============================================================================
-# MODULE D: RANDOMIZED ATTENDANCE GENERATION ENGINE (WITH 'P/2' SUPPORT)
+# MODULE D: RANDOMIZED ATTENDANCE GENERATION ENGINE
 # ==============================================================================
 
 def _distribute_non_present_days_realistically(
@@ -942,9 +1277,16 @@ def generate_attendance_register(
     seed: int | None = None,
     avoid_long_streaks: bool = True,
 ) -> pd.DataFrame:
-    """Generates the complete monthly attendance register DataFrame with 'P', 'P/2', 'A', and 'OFF'."""
+    """Generates the complete monthly attendance register DataFrame.
+
+    - In Excel Modes (`pdf_minimal_output=False`):
+      `S.No.`, `Name Of Employee's`, `1..N`, `Total Days Present`, `Total Absent Days`, `Per Day Wage`, `Total Wages`, `SIGN`
+    - In PDF Mode (`pdf_minimal_output=True`):
+      `S.No.`, `Name Of Employee's`, `1..N`, `Total Wages`, `SIGN`
+    """
     base_rng = random.Random(seed)
     rows_out: list[dict[str, Any]] = []
+    is_pdf_minimal = any(r.pdf_minimal_output for r in records)
 
     for idx, emp in enumerate(records):
         emp_seed = base_rng.randint(0, 10**9) + idx * 7919
@@ -999,9 +1341,11 @@ def generate_attendance_register(
             f"Internal invariant failed for {emp.name}: total days != {cal_config.total_calendar_days}"
         )
 
-        row_dict["Total Days Present"] = emp.input_present_days
-        row_dict["Total Absent Days"] = emp.input_absent_days
-        row_dict["Per Day Wage"] = emp.per_day_wage
+        if not is_pdf_minimal:
+            row_dict["Total Days Present"] = emp.input_present_days
+            row_dict["Total Absent Days"] = emp.input_absent_days
+            row_dict["Per Day Wage"] = emp.per_day_wage
+
         row_dict["Total Wages"] = emp.total_wages
         row_dict["SIGN"] = ""
 
@@ -1047,30 +1391,30 @@ def _populate_register_worksheet(
     ws.views.sheetView[0].showGridLines = True
 
     num_days = cal_config.total_calendar_days
-    total_cols = 2 + num_days + 5
+    headers = list(register_df.columns)
+    total_cols = len(headers)
     last_col_letter = get_column_letter(total_cols)
 
     clean_company = str(company_name or "").strip() or "COMPANY NAME"
 
-    # Print-Friendly Light Palette with Dark Readable Text
-    COMPANY_BANNER_BG = "E2E8F0"   # Soft light slate for Company Name banner
-    HEADER_LIGHT_BG = "F1F5F9"     # Very light cool grey/blue for regular column headers
-    OFF_HEADER_LIGHT_BG = "FADBD8" # Light red/rose shade for Sunday & Holiday ('OFF') column headers
-    TOTAL_ROW_BG = "E2E8F0"        # Light slate for Totals row
-    ZEBRA_FILL = "F8FAFC"          # Subtle off-white alternating row tint
+    COMPANY_BANNER_BG = "E2E8F0"
+    HEADER_LIGHT_BG = "F1F5F9"
+    OFF_HEADER_LIGHT_BG = "FADBD8"
+    TOTAL_ROW_BG = "E2E8F0"
+    ZEBRA_FILL = "F8FAFC"
     WHITE_FILL = "FFFFFF"
 
-    DARK_TEXT = "0F172A"           # Crisp dark slate/black font for headers and regular cells
-    OFF_HEADER_TEXT = "78281F"     # Dark crimson/maroon text for OFF headers
+    DARK_TEXT = "0F172A"
+    OFF_HEADER_TEXT = "78281F"
 
-    OFF_CELL_BG = "FADBD8"         # Light red/rose highlight for OFF cells
-    OFF_TEXT_COLOR = "78281F"      # Dark red/maroon text for OFF cells
+    OFF_CELL_BG = "FADBD8"
+    OFF_TEXT_COLOR = "78281F"
 
-    P_TEXT_COLOR = "145A32"        # Dark forest green text for Present ('P')
-    HALF_P_CELL_BG = "FEF9E7"      # Soft light yellow tint for Half-Day ('P/2')
-    HALF_P_TEXT_COLOR = "7D6608"   # Dark amber/brown text for Half-Day ('P/2')
-    A_CELL_BG = "FDEDEC"           # Soft light pink tint for Absent ('A')
-    A_TEXT_COLOR = "922B21"        # Dark crimson text for Absent ('A')
+    P_TEXT_COLOR = "145A32"
+    HALF_P_CELL_BG = "FEF9E7"
+    HALF_P_TEXT_COLOR = "7D6608"
+    A_CELL_BG = "FDEDEC"
+    A_TEXT_COLOR = "922B21"
 
     BORDER_GRAY = "94A3B8"
     DARK_BORDER = "334155"
@@ -1100,14 +1444,21 @@ def _populate_register_worksheet(
     )
     ws.row_dimensions[1].height = 30
 
-    # ── Row 2: Column Headings (Light Fill + Dark Font; Light Red for Sundays/Holidays) ──
+    # ── Row 2: Column Headings ──
     header_row_idx = 2
-    headers = list(register_df.columns)
     header_fill = PatternFill(start_color=HEADER_LIGHT_BG, end_color=HEADER_LIGHT_BG, fill_type="solid")
     off_header_fill = PatternFill(start_color=OFF_HEADER_LIGHT_BG, end_color=OFF_HEADER_LIGHT_BG, fill_type="solid")
     header_font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
     date_header_font = Font(name="Calibri", size=9, bold=True, color=DARK_TEXT)
     off_date_header_font = Font(name="Calibri", size=9, bold=True, color=OFF_HEADER_TEXT)
+
+    numeric_summary_cols = {
+        "S.No.",
+        "Total Days Present",
+        "Total Absent Days",
+        "Per Day Wage",
+        "Total Wages",
+    }
 
     for col_idx, col_name in enumerate(headers, start=1):
         cell = ws.cell(row=header_row_idx, column=col_idx)
@@ -1126,7 +1477,7 @@ def _populate_register_worksheet(
             cell.font = header_font
             if col_idx == 2:
                 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-            elif col_name in ("S.No.", "Total Days Present", "Total Absent Days", "Per Day Wage", "Total Wages"):
+            elif col_name in numeric_summary_cols:
                 cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -1242,39 +1593,38 @@ def _populate_register_worksheet(
         c.fill = total_fill
         c.border = total_border
 
-    present_col_idx = 3 + num_days
-    absent_col_idx = 4 + num_days
-    pdw_col_idx = 5 + num_days
-    tw_col_idx = 6 + num_days
-    sign_col_idx = 7 + num_days
-
-    has_any_half_day = any(
-        isinstance(format_day_count(x), float)
-        for x in list(register_df["Total Days Present"]) + list(register_df["Total Absent Days"])
-    )
+    has_any_half_day = False
+    for d_col in ("Total Days Present", "Total Absent Days"):
+        if d_col in register_df.columns:
+            if any(isinstance(format_day_count(x), float) for x in register_df[d_col]):
+                has_any_half_day = True
+                break
     day_sum_fmt = "#,##0.0" if has_any_half_day else "#,##0"
 
-    for c_idx, num_fmt, is_sum in [
-        (present_col_idx, day_sum_fmt, True),
-        (absent_col_idx, day_sum_fmt, True),
-        (pdw_col_idx, "₹#,##0.00", False),
-        (tw_col_idx, "₹#,##0.00", True),
-    ]:
-        col_let = get_column_letter(c_idx)
-        c = ws.cell(row=total_row_idx, column=c_idx)
-        if is_sum:
-            c.value = f"=SUM({col_let}{start_data_row}:{col_let}{last_data_row})"
-        else:
-            c.value = f"=AVERAGE({col_let}{start_data_row}:{col_let}{last_data_row})"
-        c.font = total_font
-        c.alignment = Alignment(horizontal="right", vertical="center")
-        c.number_format = num_fmt
+    for col_idx in range(3 + num_days, total_cols + 1):
+        col_name = headers[col_idx - 1]
+        col_let = get_column_letter(col_idx)
+        c = ws.cell(row=total_row_idx, column=col_idx)
         c.fill = total_fill
         c.border = total_border
 
-    sign_total_cell = ws.cell(row=total_row_idx, column=sign_col_idx, value=None)
-    sign_total_cell.fill = total_fill
-    sign_total_cell.border = total_border
+        if col_name in ("Total Days Present", "Total Absent Days"):
+            c.value = f"=SUM({col_let}{start_data_row}:{col_let}{last_data_row})"
+            c.font = total_font
+            c.alignment = Alignment(horizontal="right", vertical="center")
+            c.number_format = day_sum_fmt
+        elif col_name == "Per Day Wage":
+            c.value = f"=AVERAGE({col_let}{start_data_row}:{col_let}{last_data_row})"
+            c.font = total_font
+            c.alignment = Alignment(horizontal="right", vertical="center")
+            c.number_format = "₹#,##0.00"
+        elif col_name == "Total Wages":
+            c.value = f"=SUM({col_let}{start_data_row}:{col_let}{last_data_row})"
+            c.font = total_font
+            c.alignment = Alignment(horizontal="right", vertical="center")
+            c.number_format = "₹#,##0.00"
+        else:
+            c.value = None
 
     # ── Column Widths ──
     ws.column_dimensions["A"].width = 7.0
@@ -1284,11 +1634,19 @@ def _populate_register_worksheet(
     for col_idx in range(3, 3 + num_days):
         ws.column_dimensions[get_column_letter(col_idx)].width = 5.0
 
-    ws.column_dimensions[get_column_letter(present_col_idx)].width = 13.5
-    ws.column_dimensions[get_column_letter(absent_col_idx)].width = 12.5
-    ws.column_dimensions[get_column_letter(pdw_col_idx)].width = 14.5
-    ws.column_dimensions[get_column_letter(tw_col_idx)].width = 15.5
-    ws.column_dimensions[get_column_letter(sign_col_idx)].width = 18.0
+    for col_idx in range(3 + num_days, total_cols + 1):
+        col_name = headers[col_idx - 1]
+        col_let = get_column_letter(col_idx)
+        if col_name == "Total Days Present":
+            ws.column_dimensions[col_let].width = 13.5
+        elif col_name == "Total Absent Days":
+            ws.column_dimensions[col_let].width = 12.5
+        elif col_name == "Per Day Wage":
+            ws.column_dimensions[col_let].width = 14.5
+        elif col_name == "Total Wages":
+            ws.column_dimensions[col_let].width = 15.5
+        elif col_name == "SIGN":
+            ws.column_dimensions[col_let].width = 18.0
 
     # ── Freeze Panes & Auto-Filter ──
     ws.freeze_panes = "C3"
@@ -1362,7 +1720,7 @@ def export_multi_sheet_attendance_registers_to_excel(
 
 
 # ==============================================================================
-# MODULE G: STREAMLIT USER INTERFACE (SINGLE & BULK WORKFLOWS)
+# MODULE G: STREAMLIT USER INTERFACE (SINGLE, BULK & PDF ECR WORKFLOWS)
 # ==============================================================================
 
 def _render_total_salary_card(
@@ -1414,11 +1772,15 @@ def _render_holiday_and_generation_steps(
     avoid_streaks: bool,
     row_offset_base: int = 2,
 ) -> None:
-    """Renders Steps 3, 4, 5, and 6 identically for both Single and Bulk-Single-Sheet workflows."""
+    """Renders Steps 3, 4, 5, and 6 for Single, Bulk-Single-Sheet, and PDF Mode workflows."""
     st.header("Step 3: Review Indian Calendar & Configure Holidays")
     _, total_cal_days = calendar.monthrange(selected_year, selected_month)
-    inferred_off = infer_target_off_days_from_df(input_df, total_cal_days) if input_df is not None else None
-    state_key = f"holidays_{selected_year}_{selected_month}_{inferred_off}"
+    inferred_off = (
+        None
+        if selected_validation_mode == ValidationMode.PDF_MODE
+        else (infer_target_off_days_from_df(input_df, total_cal_days) if input_df is not None else None)
+    )
+    state_key = f"holidays_{selected_year}_{selected_month}_{inferred_off}_{selected_validation_mode}"
     if state_key not in st.session_state:
         st.session_state[state_key] = get_month_default_holidays(
             selected_year,
@@ -1470,7 +1832,7 @@ def _render_holiday_and_generation_steps(
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Total Calendar Days", cal_config.total_calendar_days)
-    kpi2.metric("Active Working Days (DAILY)", cal_config.total_active_working_days)
+    kpi2.metric("Active Working Days", cal_config.total_active_working_days)
     kpi3.metric("Total OFF Days", cal_config.total_off_days)
     kpi4.metric(
         "Sundays / Festival Holidays",
@@ -1497,14 +1859,77 @@ def _render_holiday_and_generation_steps(
             })
         st.dataframe(pd.DataFrame(cal_preview_rows), width="stretch")
 
-    # ── STEP 4: Validate Input ──
+    # ── PDF Mode: Present Days Range (n to m) when all NCP Days <= 0 ──
+    selected_present_range: tuple[int, int] | None = None
+    if selected_validation_mode == ValidationMode.PDF_MODE:
+        ncp_all_zero = all_ecr_ncp_non_positive(input_df)
+        if ncp_all_zero:
+            st.subheader("🎯 Present Days Range (All Employees Have 0 NCP Days)")
+            st.info(
+                "Every member in this ECR PDF has **NCP Days ≤ 0**. Choose a preset or custom "
+                "Present Days range (`n` to `m`) to randomly assign varied Present day counts across employees:"
+            )
+            max_active = max(1, cal_config.total_active_working_days)
+            preset_choice = st.radio(
+                "Select Present Days Range (n to m)",
+                options=[
+                    "05–10 Days",
+                    "10–15 Days",
+                    "15–20 Days",
+                    "Custom Range (n to m)",
+                    "Full Active Days (No Random Range)",
+                ],
+                index=1,
+                horizontal=True,
+            )
+            if preset_choice == "05–10 Days":
+                selected_present_range = (min(5, max_active), min(10, max_active))
+            elif preset_choice == "10–15 Days":
+                selected_present_range = (min(10, max_active), min(15, max_active))
+            elif preset_choice == "15–20 Days":
+                selected_present_range = (min(15, max_active), min(20, max_active))
+            elif preset_choice == "Custom Range (n to m)":
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    custom_n = int(
+                        st.number_input(
+                            "Lowest Present Days (n)",
+                            min_value=0,
+                            max_value=max_active,
+                            value=min(10, max_active),
+                            step=1,
+                        )
+                    )
+                with rc2:
+                    custom_m = int(
+                        st.number_input(
+                            "Highest Present Days (m)",
+                            min_value=custom_n,
+                            max_value=max_active,
+                            value=min(15, max_active),
+                            step=1,
+                        )
+                    )
+                selected_present_range = (custom_n, custom_m)
+            else:
+                selected_present_range = None
+
+    # ── STEP 4: Validate Input & Compute Attendance / Wage Figures ──
     st.header("Step 4: Validate Employee Records & Preprocessing")
-    val_report = validate_employee_dataframe(
-        input_df,
-        cal_config,
-        monthly_mode=selected_validation_mode,
-        row_offset_base=row_offset_base,
-    )
+    if selected_validation_mode == ValidationMode.PDF_MODE:
+        val_report = build_records_from_ecr_dataframe(
+            input_df,
+            cal_config,
+            present_range=selected_present_range,
+            seed=(int(seed_val) if use_seed else None),
+        )
+    else:
+        val_report = validate_employee_dataframe(
+            input_df,
+            cal_config,
+            monthly_mode=selected_validation_mode,
+            row_offset_base=row_offset_base,
+        )
 
     if val_report.errors:
         st.error(
@@ -1513,7 +1938,7 @@ def _render_holiday_and_generation_steps(
         )
         err_df = pd.DataFrame([
             {
-                "Excel Row": e.row_index,
+                "Row": e.row_index,
                 "S.No.": e.sno,
                 "Employee Name": e.employee_name,
                 "Category": e.wages_rate_type,
@@ -1525,11 +1950,14 @@ def _render_holiday_and_generation_steps(
         ])
         st.dataframe(err_df, width="stretch")
     else:
-        mode_badge = (
-            "Strict Mode"
-            if selected_validation_mode == ValidationMode.STRICT_MODE
-            else ("Easy (Bulk)" if selected_validation_mode == ValidationMode.EASY_BULK else "Easy (Single)")
-        )
+        if selected_validation_mode == ValidationMode.PDF_MODE:
+            mode_badge = "PDF Mode (EPF ECR)"
+        elif selected_validation_mode == ValidationMode.STRICT_MODE:
+            mode_badge = "Strict Mode"
+        elif selected_validation_mode == ValidationMode.EASY_BULK:
+            mode_badge = "Easy (Bulk)"
+        else:
+            mode_badge = "Easy (Single)"
         st.success(
             f"✅ All **{len(val_report.valid_records)}** employee records are ready for generation ({mode_badge})!"
         )
@@ -1538,7 +1966,7 @@ def _render_holiday_and_generation_steps(
         with st.expander(f"ℹ️ View Notes ({len(val_report.warnings)})", expanded=False):
             warn_df = pd.DataFrame([
                 {
-                    "Excel Row": w.row_index,
+                    "Row": w.row_index,
                     "S.No.": w.sno,
                     "Employee Name": w.employee_name,
                     "Category": w.wages_rate_type,
@@ -1551,26 +1979,40 @@ def _render_holiday_and_generation_steps(
 
     if val_report.valid_records:
         with st.expander("🔍 Preview Employee Preprocessing & Wage Calculations", expanded=True):
-            pre_df = pd.DataFrame([
-                {
-                    "S.No.": r.sno,
-                    "Name Of Employee's": r.name,
-                    "Designation": r.designation or "-",
-                    "Wages Rate": r.wages_rate_type,
-                    "Input Rate (₹)": r.base_rate,
-                    "Per Day Wage (₹)": r.per_day_wage,
-                    "Output Present Days (Copied)": r.input_present_days,
-                    "Output Absent Days (Copied)": r.input_absent_days,
-                    "Grid 'P' Cells": r.active_p_days,
-                    "Grid 'P/2' Cells": r.active_half_p_days,
-                    "Grid 'A' Cells": r.active_a_days,
-                    "Grid 'OFF' Cells": r.off_days_count,
-                    "Total Wages (₹)": r.total_wages,
-                    "Date of Resign": r.date_of_resign or "-",
-                    "Logic Applied": r.accounting_note,
-                }
-                for r in val_report.valid_records
-            ])
+            if selected_validation_mode == ValidationMode.PDF_MODE:
+                pre_df = pd.DataFrame([
+                    {
+                        "S.No. (Sl. No.)": r.sno,
+                        "Name Of Employee's (UAN Repo)": r.name,
+                        "Grid 'P' Cells": r.active_p_days,
+                        "Grid 'P/2' Cells": r.active_half_p_days,
+                        "Grid 'A' Cells": r.active_a_days,
+                        "Grid 'OFF' Cells": r.off_days_count,
+                        "Total Wages (Wages – EPF)": r.total_wages,
+                    }
+                    for r in val_report.valid_records
+                ])
+            else:
+                pre_df = pd.DataFrame([
+                    {
+                        "S.No.": r.sno,
+                        "Name Of Employee's": r.name,
+                        "Designation": r.designation or "-",
+                        "Wages Rate": r.wages_rate_type,
+                        "Input Rate (₹)": r.base_rate,
+                        "Per Day Wage (₹)": r.per_day_wage,
+                        "Output Present Days (Copied)": r.input_present_days,
+                        "Output Absent Days (Copied)": r.input_absent_days,
+                        "Grid 'P' Cells": r.active_p_days,
+                        "Grid 'P/2' Cells": r.active_half_p_days,
+                        "Grid 'A' Cells": r.active_a_days,
+                        "Grid 'OFF' Cells": r.off_days_count,
+                        "Total Wages (₹)": r.total_wages,
+                        "Date of Resign": r.date_of_resign or "-",
+                        "Logic Applied": r.accounting_note,
+                    }
+                    for r in val_report.valid_records
+                ])
             st.dataframe(pre_df, width="stretch")
 
     # ── STEP 5 & STEP 6: Generate Attendance & Download Excel ──
@@ -1659,11 +2101,10 @@ def run_streamlit_app() -> None:
 
     st.title("📅 Mock Attendance Register Generator")
     st.markdown(
-        "Convert a monthly employee salary Excel sheet (`.xlsx`) into a realistic, "
+        "Convert a monthly employee salary Excel sheet (`.xlsx`) or an EPF ECR statement (`.pdf`) into a realistic, "
         "Indian-calendar-based monthly attendance register ready for printing and physical signatures."
     )
 
-    # Sidebar: Mode Selection, Sample Downloads & Randomization Settings
     with st.sidebar:
         st.header("🛡️ Mode Selection")
         validation_mode_choice = st.radio(
@@ -1671,14 +2112,18 @@ def run_streamlit_app() -> None:
             options=[
                 "Easy (Single) - Default",
                 "Easy (Bulk)",
+                "PDF Mode (EPF ECR)",
                 "Strict Mode",
             ],
             index=0,
             help=(
-                "• Easy (Single) [Default]: Standard single-sheet upload (headers in Row 1) with Easy Mode logic.\n\n"
-                "• Easy (Bulk): Raw sheet / multi-sheet upload where Company Name is read from cell D2, "
-                "sheet names like 'JAN 24' or 'APR 25' auto-select the Month & Year, and headers are extracted "
-                "from B10:O10 with employee rows from B11:O{n} (cutting off immediately when S.No., UAN, and Name are empty).\n\n"
+                "• Easy (Single) [Default]: Standard single-sheet Excel upload (headers in Row 1).\n\n"
+                "• Easy (Bulk): Raw sheet / multi-sheet Excel upload where Company Name is read from D2, "
+                "sheet names like 'JAN 24' auto-select Month & Year, and headers are read from B10:O10.\n\n"
+                "• PDF Mode (EPF ECR): Upload an EPF ECR PDF (2 pages or multi-page). Extracts Establishment Name & "
+                "Return Month (MMM-YYYY) from Page 1, checks Pages 2..n for the Member Details table, uses "
+                "Wages – EPF directly as Total Wages, and offers a preset/custom Present Days range (n to m) "
+                "when NCP Days <= 0 for everyone.\n\n"
                 "• Strict Mode: Enforces strict Present + Absent calendar math equations on single-sheet uploads."
             ),
         )
@@ -1686,6 +2131,8 @@ def run_streamlit_app() -> None:
             selected_validation_mode = ValidationMode.EASY_SINGLE
         elif validation_mode_choice.startswith("Easy (Bulk)"):
             selected_validation_mode = ValidationMode.EASY_BULK
+        elif validation_mode_choice.startswith("PDF Mode"):
+            selected_validation_mode = ValidationMode.PDF_MODE
         else:
             selected_validation_mode = ValidationMode.STRICT_MODE
 
@@ -1701,6 +2148,11 @@ def run_streamlit_app() -> None:
                 help="Multi-sheet sample workbook (JAN 24, APR 25, OCT 26) with Company Name in D2 and headers in B10:O10.",
             )
             use_sample_data = st.checkbox("Use built-in Bulk sample workbook", value=False)
+        elif selected_validation_mode == ValidationMode.PDF_MODE:
+            use_sample_data = st.checkbox(
+                "Use built-in example.pdf (AMBIKA PROJECTS, AUG-2021)",
+                value=False,
+            )
         else:
             sample_bytes = export_sample_input_to_excel()
             st.download_button(
@@ -1766,7 +2218,7 @@ def run_streamlit_app() -> None:
             )
         month_names = list(calendar.month_name)[1:]
         with col_m:
-            selected_month_name = st.selectbox("Select Month", options=month_names, index=9)  # Default October
+            selected_month_name = st.selectbox("Select Month", options=month_names, index=9)
             selected_month = month_names.index(selected_month_name) + 1
         with col_y:
             selected_year = int(
@@ -1791,7 +2243,102 @@ def run_streamlit_app() -> None:
         )
 
     # ==========================================================================
-    # WORKFLOW 2: EASY (BULK) MODE (B10:O10 HEADERS, D2 COMPANY, {MMM YY} SHEETS)
+    # WORKFLOW 2: PDF MODE (EPF ELECTRONIC CHALLAN CUM RETURN - ECR)
+    # ==========================================================================
+    elif selected_validation_mode == ValidationMode.PDF_MODE:
+        st.header("Step 1: Upload EPF Electronic Challan cum Return (ECR) PDF")
+        st.markdown(
+            "Upload an **EPF Electronic Challan cum Return (ECR)** PDF file:\n"
+            "- **Page 1**: Automatically extracts **`Name of Establishment`** and **`Return Month`** (`MMM-YYYY`, e.g., `AUG-2021`).\n"
+            "- **Pages 2 to `n`**: Automatically detects and extracts every **Member Details** table (`Sl. No.`, `Name as per – UAN Repository`, `Wages – EPF`, `NCP Days`) across 2-page or multi-page PDFs while ignoring remarks pages."
+        )
+
+        uploaded_pdf = st.file_uploader(
+            "Upload EPF ECR PDF file (.pdf)",
+            type=["pdf"],
+            key="pdf_ecr_uploader",
+        )
+
+        ecr_result: EcrPdfExtractionResult | None = None
+        if uploaded_pdf is not None:
+            ecr_result = extract_ecr_pdf_data(uploaded_pdf.getvalue())
+            st.success(
+                f"Parsed ECR PDF (**{ecr_result.total_pages}** pages total; extracted **{len(ecr_result.raw_member_df)}** members "
+                f"from Member Details page(s) **{', '.join(map(str, ecr_result.member_pages_processed))}**). "
+                f"Detected Establishment: **`{ecr_result.company_name}`** | Return Month: **`{ecr_result.return_month_str}`**."
+            )
+            st.dataframe(ecr_result.raw_member_df, width="stretch")
+        elif use_sample_data:
+            sample_ecr_df = create_sample_ecr_dataframe()
+            ecr_result = EcrPdfExtractionResult(
+                company_name="AMBIKA PROJECTS",
+                return_month_str="AUG-2021",
+                wage_month_str="JUL-2021",
+                parsed_month=8,
+                parsed_year=2021,
+                total_pages=3,
+                member_pages_processed=[2],
+                raw_member_df=sample_ecr_df,
+            )
+            st.info(
+                "Using built-in `example.pdf` dataset (**AMBIKA PROJECTS**, Return Month **`AUG-2021`**, 10 members from Page 2)."
+            )
+            st.dataframe(ecr_result.raw_member_df, width="stretch")
+        else:
+            st.info(
+                "Upload an EPF ECR `.pdf` file above or check **'Use built-in example.pdf (AMBIKA PROJECTS, AUG-2021)'** in the sidebar to begin."
+            )
+            st.stop()
+
+        st.header("Step 2: Review Extracted Establishment Name & Return Month")
+        col_comp, col_m, col_y = st.columns([2, 1, 1])
+        with col_comp:
+            company_name_input = st.text_input(
+                "Name of Establishment (Extracted from Page 1; editable)",
+                value=ecr_result.company_name,
+                key=f"pdf_comp_{ecr_result.company_name}_{ecr_result.return_month_str}",
+            )
+
+        month_names = list(calendar.month_name)[1:]
+        default_m_idx = max(0, min(11, ecr_result.parsed_month - 1))
+        default_y_val = min(max(ecr_result.parsed_year, 2015), 2032)
+
+        with col_m:
+            selected_month_name = st.selectbox(
+                f"Return Month (Extracted: {ecr_result.return_month_str})",
+                options=month_names,
+                index=default_m_idx,
+                key=f"pdf_m_{ecr_result.return_month_str}",
+            )
+            selected_month = month_names.index(selected_month_name) + 1
+        with col_y:
+            selected_year = int(
+                st.number_input(
+                    f"Return Year (Extracted: {ecr_result.return_month_str})",
+                    min_value=2015,
+                    max_value=2032,
+                    value=default_y_val,
+                    step=1,
+                    key=f"pdf_y_{ecr_result.return_month_str}",
+                )
+            )
+
+        _render_holiday_and_generation_steps(
+            st=st,
+            input_df=ecr_result.raw_member_df,
+            company_name_input=company_name_input,
+            selected_month=selected_month,
+            selected_month_name=selected_month_name,
+            selected_year=selected_year,
+            selected_validation_mode=ValidationMode.PDF_MODE,
+            use_seed=use_seed,
+            seed_val=int(seed_val),
+            avoid_streaks=avoid_streaks,
+            row_offset_base=1,
+        )
+
+    # ==========================================================================
+    # WORKFLOW 3: EASY (BULK) MODE (B10:O10 HEADERS, D2 COMPANY, {MMM YY} SHEETS)
     # ==========================================================================
     else:
         st.header("Step 1: Upload Bulk Employee Salary Excel Workbook")
