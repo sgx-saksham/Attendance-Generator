@@ -11,12 +11,13 @@ Supported Modes in Sidebar:
   2. Easy (Bulk): Multi-sheet or raw-grid Excel upload (`D2` Company Name,
      `{MMM YY}` sheet names, `B10:O10` headers, and strict 3-key cutoff on
      `['S.No.', 'UAN', "Name Of Employee's"]`).
-  3. PDF Mode (EPF ECR): Extracts `Name of Establishment` and `Return Month`
-     (`MMM-YYYY`, e.g. `AUG-2021`) from Page 1, checks Pages 2..n for the
+  3. PDF Mode (EPF ECR): Extracts `Name of Establishment` and `Wage Month`
+     (`MMM-YYYY`, e.g. `JUL-2021`) from Page 1, checks Pages 2..n for the
      Member Details table (works for 2-page PDFs as well as multi-page PDFs),
-     outputs clean register columns (`S.No.`, `Name Of Employee's`, `1..30/31`,
-     `Total Wages` directly from `Wages – EPF`, `SIGN`), and supports a
-     preset/custom Present Days range (`n` to `m`) when `NCP Days <= 0`.
+     outputs register columns (`S.No.`, `Name Of Employee's`, `1..30/31`,
+     `Total Days Present`, `Total Absent Days`, `Total Wages` directly from
+     `Wages – EPF`, `SIGN`), and supports a preset/custom Present Days range
+     (`n` to `m`) when `NCP Days <= 0`.
   4. Strict Mode: Single-sheet Excel upload with strict calendar math checks.
 """
 
@@ -134,7 +135,7 @@ def format_day_count(val: float | int) -> int | float:
 
 
 def parse_sheet_month_year(sheet_name: str) -> tuple[int, int] | None:
-    """Parses a month-year string like 'JAN 24', 'APR 25', 'AUG-2021', 'OCT-2026' into (month_int, year_int)."""
+    """Parses a month-year string like 'JAN 24', 'APR 25', 'JUL-2021', 'OCT-2026' into (month_int, year_int)."""
     cleaned = str(sheet_name or "").strip().upper()
     match = re.search(r"\b([A-Z]{3,9})[\s\-_\/\.']*(\d{2}|\d{4})\b", cleaned)
     if not match:
@@ -164,8 +165,8 @@ def _is_cell_non_empty(val: Any) -> bool:
 class EcrPdfExtractionResult:
     """Holds the extracted metadata and member table from an EPF ECR PDF file."""
     company_name: str
-    return_month_str: str
     wage_month_str: str
+    return_month_str: str
     parsed_month: int
     parsed_year: int
     total_pages: int
@@ -177,7 +178,6 @@ def _is_member_details_table(tbl: list[list[Any]]) -> bool:
     """Checks whether an extracted PDF table is an EPF ECR Member Details table."""
     if not tbl:
         return False
-    # Check header rows for ECR member table keywords (and exclude Reason Code remarks tables)
     header_text = " ".join(
         str(cell).strip().lower()
         for row in tbl[:3]
@@ -189,7 +189,6 @@ def _is_member_details_table(tbl: list[list[Any]]) -> bool:
         return False
     if any(k in header_text for k in ("ncp", "uan", "sl. no", "repository", "remitted")):
         return True
-    # Also accept continuation pages without repeated headers if rows have >= 12 cols & numeric Sl. No.
     for row in tbl:
         if row and len(row) >= 12 and row[0] is not None and re.match(r"^\d+$", str(row[0]).strip()):
             return True
@@ -197,10 +196,10 @@ def _is_member_details_table(tbl: list[list[Any]]) -> bool:
 
 
 def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
-    """Extracts Establishment Name, Return Month (MMM-YYYY), and Member Details from an EPF ECR PDF.
+    """Extracts Establishment Name, Wage Month (MMM-YYYY), and Member Details from an EPF ECR PDF.
 
     Rules:
-      - Page 1: Extracts `Name of Establishment` and `Return Month` (e.g. `AUG-2021`).
+      - Page 1: Extracts `Name of Establishment` and `Wage Month` (e.g. `JUL-2021`).
       - Pages 2..n: Inspects every page after Page 1 for a Member Details table (works
         whether the PDF has 2 pages, 3 pages with remarks on page 3, or many member pages),
         extracting only genuine Member Details rows and ignoring remarks/reason-code tables.
@@ -219,8 +218,8 @@ def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
         pdf_file_obj = pdf_source
 
     company_name = ""
-    return_month_str = ""
     wage_month_str = ""
+    return_month_str = ""
     member_rows: list[dict[str, Any]] = []
     member_pages_processed: list[int] = []
 
@@ -229,7 +228,7 @@ def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
         if total_pages == 0:
             raise ValueError("Uploaded PDF has 0 pages.")
 
-        # ── 1. Page 1: Extract Name of Establishment & Return Month ──
+        # ── 1. Page 1: Extract Name of Establishment & Wage Month ──
         p1 = pdf.pages[0]
         p1_tables = p1.extract_tables() or []
         for tbl in p1_tables:
@@ -245,15 +244,15 @@ def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
                             if next_val and str(next_val).strip():
                                 company_name = " ".join(str(next_val).strip().split())
                                 break
-                    elif "return month" in label_clean:
-                        for next_val in row[idx_c + 1:]:
-                            if next_val and str(next_val).strip():
-                                return_month_str = " ".join(str(next_val).strip().split())
-                                break
                     elif "wage month" in label_clean:
                         for next_val in row[idx_c + 1:]:
                             if next_val and str(next_val).strip():
                                 wage_month_str = " ".join(str(next_val).strip().split())
+                                break
+                    elif "return month" in label_clean:
+                        for next_val in row[idx_c + 1:]:
+                            if next_val and str(next_val).strip():
+                                return_month_str = " ".join(str(next_val).strip().split())
                                 break
 
         p1_text = p1.extract_text() or ""
@@ -261,6 +260,10 @@ def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
             m_comp = re.search(r"Name of Establishment\s+([A-Z0-9\s\.\&\-\(\),]+)", p1_text)
             if m_comp:
                 company_name = m_comp.group(1).strip().splitlines()[0].strip()
+        if not wage_month_str:
+            m_wage = re.search(r"Wage Month\s*[:\-]?\s*([A-Za-z]{3,9}[\s\-_\/]\d{2,4})", p1_text)
+            if m_wage:
+                wage_month_str = m_wage.group(1).strip()
         if not return_month_str:
             m_ret = re.search(r"Return Month\s*[:\-]?\s*([A-Za-z]{3,9}[\s\-_\/]\d{2,4})", p1_text)
             if m_ret:
@@ -337,16 +340,17 @@ def extract_ecr_pdf_data(pdf_source: Any) -> EcrPdfExtractionResult:
             if page_had_members:
                 member_pages_processed.append(p_idx + 1)
 
-    parsed_my = parse_sheet_month_year(return_month_str) or parse_sheet_month_year(wage_month_str)
+    # Prioritize Wage Month (e.g. JUL-2021) over Return Month
+    parsed_my = parse_sheet_month_year(wage_month_str) or parse_sheet_month_year(return_month_str)
     if parsed_my is not None:
         parsed_month, parsed_year = parsed_my
     else:
-        parsed_month, parsed_year = 8, 2021
+        parsed_month, parsed_year = 7, 2021
 
     return EcrPdfExtractionResult(
         company_name=company_name or "AMBIKA PROJECTS",
-        return_month_str=return_month_str or f"{calendar.month_abbr[parsed_month].upper()}-{parsed_year}",
-        wage_month_str=wage_month_str,
+        wage_month_str=wage_month_str or f"{calendar.month_abbr[parsed_month].upper()}-{parsed_year}",
+        return_month_str=return_month_str,
         parsed_month=parsed_month,
         parsed_year=parsed_year,
         total_pages=total_pages,
@@ -362,7 +366,6 @@ def all_ecr_ncp_non_positive(ecr_df: pd.DataFrame) -> bool:
     for val in ecr_df["NCP Days"]:
         parsed, err = _parse_non_negative_day_value(val)
         if err is not None:
-            # Handle negative numbers explicitly if any
             try:
                 if float(str(val).replace(",", "").strip()) > 0:
                     return False
@@ -381,17 +384,14 @@ def build_records_from_ecr_dataframe(
 ) -> ValidationReport:
     """Converts extracted EPF ECR Member Details into ValidatedEmployeeRecord objects.
 
-    Simplified PDF Mode Rules:
+    PDF Mode Rules:
       - `S.No.`              = `Sl. No.`
       - `Name Of Employee's` = `Name as per – UAN Repository`
-      - `Total Wages`        = Directly copied from `Wages – EPF` (no Per Day Wage calculation)
-      - Attendance Grid:
-          * When `present_range=(n, m)` is active (e.g. when `NCP Days <= 0` for everyone),
-            randomly picks an integer Present day count in `[n, m]` for each employee
-            (e.g. 10, 12, 11, 14, 15) and marks the remaining active working days as `A`.
-          * Otherwise, `Present = Active Working Days - NCP Days`, `Absent = NCP Days`.
+      - `Total Days Present` = `Active Working Days - NCP Days` (or randomized in `[n, m]` when `NCP Days <= 0` and range is selected)
+      - `Total Absent Days`  = `NCP Days` (or `Active Working Days - Present Days` when range is selected)
+      - `Total Wages`        = Directly copied from `Wages – EPF` (no Per Day Wage column)
       - Final Output Columns in PDF Mode:
-          `S.No.` | `Name Of Employee's` | `1`..`N` | `Total Wages` | `SIGN`
+          `S.No.` | `Name Of Employee's` | `1`..`N` | `Total Days Present` | `Total Absent Days` | `Total Wages` | `SIGN`
     """
     if ecr_df.empty:
         return ValidationReport(
@@ -447,11 +447,11 @@ def build_records_from_ecr_dataframe(
             chosen_present = range_rng.randint(r_min, r_max)
             raw_present_days = float(chosen_present)
             ncp_days_val = float(active_work_days - chosen_present)
-            range_note = f"Range ({r_min}–{r_max}) -> Randomized {chosen_present} 'P', {int(ncp_days_val)} 'A'"
+            range_note = f"Range ({r_min}–{r_max}) -> Randomized {chosen_present} Present, {int(ncp_days_val)} Absent"
         else:
             ncp_days_val = max(0.0, ncp_float)
             raw_present_days = max(0.0, float(active_work_days) - ncp_days_val)
-            range_note = f"Active ({active_work_days}) - NCP ({format_day_count(ncp_days_val)}) = {format_day_count(raw_present_days)} 'P'"
+            range_note = f"Active ({active_work_days}) - NCP ({format_day_count(ncp_days_val)}) = {format_day_count(raw_present_days)} Present"
 
         present_fmt = format_day_count(raw_present_days)
         absent_fmt = format_day_count(ncp_days_val)
@@ -484,7 +484,7 @@ def build_records_from_ecr_dataframe(
                 per_day_wage=0.0,
                 total_wages=total_wages,
                 accounting_note=accounting_note,
-                pdf_minimal_output=True,
+                omit_per_day_wage=True,
             )
         )
 
@@ -705,7 +705,7 @@ class ValidatedEmployeeRecord:
     accounting_note: str = ""
     designation: str = ""
     date_of_resign: str = ""
-    pdf_minimal_output: bool = False
+    omit_per_day_wage: bool = False
 
 
 @dataclasses.dataclass
@@ -1279,14 +1279,14 @@ def generate_attendance_register(
 ) -> pd.DataFrame:
     """Generates the complete monthly attendance register DataFrame.
 
-    - In Excel Modes (`pdf_minimal_output=False`):
+    - In Excel Modes (`omit_per_day_wage=False`):
       `S.No.`, `Name Of Employee's`, `1..N`, `Total Days Present`, `Total Absent Days`, `Per Day Wage`, `Total Wages`, `SIGN`
-    - In PDF Mode (`pdf_minimal_output=True`):
-      `S.No.`, `Name Of Employee's`, `1..N`, `Total Wages`, `SIGN`
+    - In PDF Mode (`omit_per_day_wage=True`):
+      `S.No.`, `Name Of Employee's`, `1..N`, `Total Days Present`, `Total Absent Days`, `Total Wages`, `SIGN`
     """
     base_rng = random.Random(seed)
     rows_out: list[dict[str, Any]] = []
-    is_pdf_minimal = any(r.pdf_minimal_output for r in records)
+    omit_pdw = any(r.omit_per_day_wage for r in records)
 
     for idx, emp in enumerate(records):
         emp_seed = base_rng.randint(0, 10**9) + idx * 7919
@@ -1341,11 +1341,10 @@ def generate_attendance_register(
             f"Internal invariant failed for {emp.name}: total days != {cal_config.total_calendar_days}"
         )
 
-        if not is_pdf_minimal:
-            row_dict["Total Days Present"] = emp.input_present_days
-            row_dict["Total Absent Days"] = emp.input_absent_days
+        row_dict["Total Days Present"] = emp.input_present_days
+        row_dict["Total Absent Days"] = emp.input_absent_days
+        if not omit_pdw:
             row_dict["Per Day Wage"] = emp.per_day_wage
-
         row_dict["Total Wages"] = emp.total_wages
         row_dict["SIGN"] = ""
 
@@ -1577,7 +1576,7 @@ def _populate_register_worksheet(
     total_row_idx = last_data_row + 1
     ws.row_dimensions[total_row_idx].height = 24
     total_fill = PatternFill(start_color=TOTAL_ROW_BG, end_color=TOTAL_ROW_BG, fill_type="solid")
-    total_font = Font(name="Calibri", size=10, bold=True, color=DARK_TEXT)
+    total_font = Font(name="Calibri", size=10, bold=True, color="0F172A")
 
     ws.cell(row=total_row_idx, column=1, value=None).fill = total_fill
     ws.cell(row=total_row_idx, column=1).border = total_border
@@ -1984,6 +1983,8 @@ def _render_holiday_and_generation_steps(
                     {
                         "S.No. (Sl. No.)": r.sno,
                         "Name Of Employee's (UAN Repo)": r.name,
+                        "Total Days Present": r.input_present_days,
+                        "Total Absent Days": r.input_absent_days,
                         "Grid 'P' Cells": r.active_p_days,
                         "Grid 'P/2' Cells": r.active_half_p_days,
                         "Grid 'A' Cells": r.active_a_days,
@@ -2121,9 +2122,9 @@ def run_streamlit_app() -> None:
                 "• Easy (Bulk): Raw sheet / multi-sheet Excel upload where Company Name is read from D2, "
                 "sheet names like 'JAN 24' auto-select Month & Year, and headers are read from B10:O10.\n\n"
                 "• PDF Mode (EPF ECR): Upload an EPF ECR PDF (2 pages or multi-page). Extracts Establishment Name & "
-                "Return Month (MMM-YYYY) from Page 1, checks Pages 2..n for the Member Details table, uses "
-                "Wages – EPF directly as Total Wages, and offers a preset/custom Present Days range (n to m) "
-                "when NCP Days <= 0 for everyone.\n\n"
+                "Wage Month (MMM-YYYY) from Page 1, checks Pages 2..n for the Member Details table, outputs "
+                "Total Days Present, Total Absent Days, Total Wages (directly from Wages – EPF), and SIGN, and offers "
+                "a preset/custom Present Days range (n to m) when NCP Days <= 0 for everyone.\n\n"
                 "• Strict Mode: Enforces strict Present + Absent calendar math equations on single-sheet uploads."
             ),
         )
@@ -2150,7 +2151,7 @@ def run_streamlit_app() -> None:
             use_sample_data = st.checkbox("Use built-in Bulk sample workbook", value=False)
         elif selected_validation_mode == ValidationMode.PDF_MODE:
             use_sample_data = st.checkbox(
-                "Use built-in example.pdf (AMBIKA PROJECTS, AUG-2021)",
+                "Use built-in example.pdf (AMBIKA PROJECTS, JUL-2021)",
                 value=False,
             )
         else:
@@ -2249,7 +2250,7 @@ def run_streamlit_app() -> None:
         st.header("Step 1: Upload EPF Electronic Challan cum Return (ECR) PDF")
         st.markdown(
             "Upload an **EPF Electronic Challan cum Return (ECR)** PDF file:\n"
-            "- **Page 1**: Automatically extracts **`Name of Establishment`** and **`Return Month`** (`MMM-YYYY`, e.g., `AUG-2021`).\n"
+            "- **Page 1**: Automatically extracts **`Name of Establishment`** and **`Wage Month`** (`MMM-YYYY`, e.g., `JUL-2021`).\n"
             "- **Pages 2 to `n`**: Automatically detects and extracts every **Member Details** table (`Sl. No.`, `Name as per – UAN Repository`, `Wages – EPF`, `NCP Days`) across 2-page or multi-page PDFs while ignoring remarks pages."
         )
 
@@ -2265,38 +2266,38 @@ def run_streamlit_app() -> None:
             st.success(
                 f"Parsed ECR PDF (**{ecr_result.total_pages}** pages total; extracted **{len(ecr_result.raw_member_df)}** members "
                 f"from Member Details page(s) **{', '.join(map(str, ecr_result.member_pages_processed))}**). "
-                f"Detected Establishment: **`{ecr_result.company_name}`** | Return Month: **`{ecr_result.return_month_str}`**."
+                f"Detected Establishment: **`{ecr_result.company_name}`** | Wage Month: **`{ecr_result.wage_month_str}`**."
             )
             st.dataframe(ecr_result.raw_member_df, width="stretch")
         elif use_sample_data:
             sample_ecr_df = create_sample_ecr_dataframe()
             ecr_result = EcrPdfExtractionResult(
                 company_name="AMBIKA PROJECTS",
-                return_month_str="AUG-2021",
                 wage_month_str="JUL-2021",
-                parsed_month=8,
+                return_month_str="AUG-2021",
+                parsed_month=7,
                 parsed_year=2021,
                 total_pages=3,
                 member_pages_processed=[2],
                 raw_member_df=sample_ecr_df,
             )
             st.info(
-                "Using built-in `example.pdf` dataset (**AMBIKA PROJECTS**, Return Month **`AUG-2021`**, 10 members from Page 2)."
+                "Using built-in `example.pdf` dataset (**AMBIKA PROJECTS**, Wage Month **`JUL-2021`**, 10 members from Page 2)."
             )
             st.dataframe(ecr_result.raw_member_df, width="stretch")
         else:
             st.info(
-                "Upload an EPF ECR `.pdf` file above or check **'Use built-in example.pdf (AMBIKA PROJECTS, AUG-2021)'** in the sidebar to begin."
+                "Upload an EPF ECR `.pdf` file above or check **'Use built-in example.pdf (AMBIKA PROJECTS, JUL-2021)'** in the sidebar to begin."
             )
             st.stop()
 
-        st.header("Step 2: Review Extracted Establishment Name & Return Month")
+        st.header("Step 2: Review Extracted Establishment Name & Wage Month")
         col_comp, col_m, col_y = st.columns([2, 1, 1])
         with col_comp:
             company_name_input = st.text_input(
                 "Name of Establishment (Extracted from Page 1; editable)",
                 value=ecr_result.company_name,
-                key=f"pdf_comp_{ecr_result.company_name}_{ecr_result.return_month_str}",
+                key=f"pdf_comp_{ecr_result.company_name}_{ecr_result.wage_month_str}",
             )
 
         month_names = list(calendar.month_name)[1:]
@@ -2305,21 +2306,21 @@ def run_streamlit_app() -> None:
 
         with col_m:
             selected_month_name = st.selectbox(
-                f"Return Month (Extracted: {ecr_result.return_month_str})",
+                f"Wage Month (Extracted: {ecr_result.wage_month_str})",
                 options=month_names,
                 index=default_m_idx,
-                key=f"pdf_m_{ecr_result.return_month_str}",
+                key=f"pdf_m_{ecr_result.wage_month_str}",
             )
             selected_month = month_names.index(selected_month_name) + 1
         with col_y:
             selected_year = int(
                 st.number_input(
-                    f"Return Year (Extracted: {ecr_result.return_month_str})",
+                    f"Wage Year (Extracted: {ecr_result.wage_month_str})",
                     min_value=2015,
                     max_value=2032,
                     value=default_y_val,
                     step=1,
-                    key=f"pdf_y_{ecr_result.return_month_str}",
+                    key=f"pdf_y_{ecr_result.wage_month_str}",
                 )
             )
 
